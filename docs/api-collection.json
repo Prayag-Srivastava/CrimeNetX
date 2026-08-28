@@ -1,0 +1,711 @@
+{
+  "info": {
+    "name": "CrimeNetX API (SIH26189)",
+    "_postman_id": "crimenetx-api-sih26189",
+    "description": "CrimeNetX — AI-Powered Criminal Network Analysis System.\n\nTwo services:\n- Node REST + WebSocket backend  -> http://localhost:5000/api  (auth, cases, suspects, evidence, network, alerts, analytics, dossier)\n- FastAPI AI/ML backend          -> http://localhost:8000/api  (NLP, graph ML, vision, vector/cross-reference, financial, agents, dossier)\n\nAuth flow: POST /auth/login -> copy `accessToken` from response into the `accessToken` collection variable (or the Authorization header of each request).\nDemo users (password Test@1234): investigator@crimenetx.gov.in / dsp@crimenetx.gov.in / sp@crimenetx.gov.in / dgp@crimenetx.gov.in\n\nVariables: nodeBase (http://localhost:5000), aiBase (http://localhost:8000), accessToken.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "nodeBase", "value": "http://localhost:5000" },
+    { "key": "aiBase", "value": "http://localhost:8000" },
+    { "key": "accessToken", "value": "" },
+    { "key": "caseId", "value": "PUN-2024-0118" },
+    { "key": "caseDbId", "value": "" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "01 · Auth (Node)",
+      "item": [
+        {
+          "name": "Register user",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/auth/register", "host": ["{{nodeBase}}"], "path": ["api", "auth", "register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"A. K. Sharma\",\n  \"email\": \"investigator@crimenetx.gov.in\",\n  \"password\": \"Test@1234\",\n  \"role\": \"INVESTIGATOR\",\n  \"department\": \"CID Pune\",\n  \"badgeNumber\": \"MH-CID-2214\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.accessToken) pm.collectionVariables.set('accessToken', body.accessToken);",
+                  "if (body.user?.id) pm.collectionVariables.set('caseDbId', body.user.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/auth/login", "host": ["{{nodeBase}}"], "path": ["api", "auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"investigator@crimenetx.gov.in\",\n  \"password\": \"Test@1234\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/auth/refresh", "host": ["{{nodeBase}}"], "path": ["api", "auth", "refresh"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"<paste refresh token from login response>\"\n}" }
+          }
+        },
+        {
+          "name": "Me (current user)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{nodeBase}}/api/auth/me", "host": ["{{nodeBase}}"], "path": ["api", "auth", "me"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 · Cases (Node)",
+      "item": [
+        {
+          "name": "List cases",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/cases?search=&status=&priority=",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "cases"],
+              "query": [
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "status", "value": "", "disabled": true },
+                { "key": "priority", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create case",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/cases", "host": ["{{nodeBase}}"], "path": ["api", "cases"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"caseNumber\": \"PUN-2024-0118\",\n  \"title\": \"Organized extortion racket — Kondhwa belt\",\n  \"description\": \"Multi-district extortion and money-laundering network operating across Pune, Mumbai and Nashik.\",\n  \"status\": \"OPEN\",\n  \"priority\": \"HIGH\",\n  \"jurisdiction\": \"Pune City Police\",\n  \"firNumber\": \"FIR/PUN/2024/0118\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get case",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/cases/:caseId",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "cases", ":caseId"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Update case",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{nodeBase}}/api/cases/:caseId",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "cases", ":caseId"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"UNDER_INVESTIGATION\",\n  \"priority\": \"CRITICAL\"\n}" }
+          }
+        },
+        {
+          "name": "Case stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/cases/:caseId/stats",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "cases", ":caseId", "stats"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Delete case (SP+)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{nodeBase}}/api/cases/:caseId",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "cases", ":caseId"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 · Suspects (Node)",
+      "item": [
+        {
+          "name": "List suspects",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/suspects?search=&caseId=",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "suspects"],
+              "query": [
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "caseId", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get suspect",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/suspects/:id",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "suspects", ":id"],
+              "variable": [{ "key": "id", "value": "" }]
+            }
+          }
+        },
+        {
+          "name": "Create suspect",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/suspects", "host": ["{{nodeBase}}"], "path": ["api", "suspects"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ravi Jadhav\",\n  \"aliases\": [\"Ravi Anna\", \"RJ\"],\n  \"phone\": \"9822012345\",\n  \"address\": \"Pune, Maharashtra\",\n  \"caseIds\": [\"PUN-2024-0118\"],\n  \"photoUrl\": \"https://placehold.co/400x500?text=S-001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update suspect (score/role)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{nodeBase}}/api/suspects/:id",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "suspects", ":id"],
+              "variable": [{ "key": "id", "value": "" }]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"kingpinScore\": 88.2,\n  \"role\": \"KINGPIN\"\n}" }
+          }
+        },
+        {
+          "name": "Delete suspect (DSP+)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{nodeBase}}/api/suspects/:id",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "suspects", ":id"],
+              "variable": [{ "key": "id", "value": "" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 · Evidence (Node)",
+      "item": [
+        {
+          "name": "Presign upload URL (S3)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/evidence/upload-url", "host": ["{{nodeBase}}"], "path": ["api", "evidence", "upload-url"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"caseId\": \"PUN-2024-0118\",\n  \"fileName\": \"cctv_frame_01.png\",\n  \"contentType\": \"image/png\",\n  \"type\": \"CCTV\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Local upload (no S3)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{nodeBase}}/api/evidence/local-upload", "host": ["{{nodeBase}}"], "path": ["api", "evidence", "local-upload"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "caseId", "value": "PUN-2024-0118" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Register evidence (SHA-256)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{nodeBase}}/api/evidence", "host": ["{{nodeBase}}"], "path": ["api", "evidence"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"caseId\": \"PUN-2024-0118\",\n  \"type\": \"PHOTO\",\n  \"fileName\": \"crime_scene_01.jpg\",\n  \"s3Url\": \"/uploads/crime_scene_01.jpg\",\n  \"sha256Hash\": \"<64-char hex>\",\n  \"gpsLat\": 18.4637,\n  \"gpsLng\": 73.8491,\n  \"capturedAt\": \"2024-11-02T09:30:00Z\",\n  \"fileSize\": 2456789\n}"
+            }
+          }
+        },
+        {
+          "name": "List evidence by case",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/evidence/case/:caseId",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "evidence", "case", ":caseId"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Fetch object bytes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/evidence/object/:key",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "evidence", "object", ":key"],
+              "variable": [{ "key": "key", "value": "uploads/evidence/2024/11/abc123.jpg" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 · Network & Ghost Links (Node)",
+      "item": [
+        {
+          "name": "Get network graph",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/case/:caseId/network",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "case", ":caseId", "network"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Rebuild network",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{nodeBase}}/api/case/:caseId/network/rebuild",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "case", ":caseId", "network", "rebuild"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Review prediction (accept/reject)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{nodeBase}}/api/case/:caseId/predictions/review",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "case", ":caseId", "predictions", "review"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"predictionId\": \"pred_01\",\n  \"accepted\": true,\n  \"investigatorNote\": \"Confirmed via CDR overlap\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 · Alerts (Node)",
+      "item": [
+        {
+          "name": "List alerts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/alerts?unresolved=true",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "alerts"],
+              "query": [{ "key": "unresolved", "value": "true" }]
+            }
+          }
+        },
+        {
+          "name": "List alerts by case",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/alerts/case/:caseId",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "alerts", "case", ":caseId"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Resolve alert",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{nodeBase}}/api/alerts/:id/resolve",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "alerts", ":id", "resolve"],
+              "variable": [{ "key": "id", "value": "" }]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"resolutionNote\": \"Verified — duplicate phone number across two cases.\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 · Analytics (Node)",
+      "item": [
+        {
+          "name": "Dashboard KPIs",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{nodeBase}}/api/analytics/dashboard", "host": ["{{nodeBase}}"], "path": ["api", "analytics", "dashboard"] }
+          }
+        },
+        {
+          "name": "Top kingpins",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{nodeBase}}/api/analytics/kingpins/top", "host": ["{{nodeBase}}"], "path": ["api", "analytics", "kingpins", "top"] }
+          }
+        },
+        {
+          "name": "District overview (SP+)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{nodeBase}}/api/analytics/districts", "host": ["{{nodeBase}}"], "path": ["api", "analytics", "districts"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 · Dossier (Node)",
+      "item": [
+        {
+          "name": "Generate dossier (auto PDF)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{nodeBase}}/api/dossier/generate/:caseId",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "dossier", "generate", ":caseId"],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        },
+        {
+          "name": "Download dossier",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{nodeBase}}/api/dossier/:id/download",
+              "host": ["{{nodeBase}}"],
+              "path": ["api", "dossier", ":id", "download"],
+              "variable": [{ "key": "id", "value": "" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 · NLP Extraction (AI)",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{aiBase}}/api/health", "host": ["{{aiBase}}"], "path": ["api", "health"] }
+          }
+        },
+        {
+          "name": "Extract entities (text)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/nlp/extract-entities", "host": ["{{aiBase}}"], "path": ["api", "nlp", "extract-entities"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"case_id\": \"PUN-2024-0118\",\n  \"source_name\": \"FIR/PUN/2024/0118\",\n  \"text\": \"On 12/11/2024 the complainant received a call from 9822012345 threatening extortion of Rs 5,00,000. The caller identified himself as Ravi Anna. Vehicle MH-12-AB-4521 was seen near the complainant's residence in Kondhwa, Pune.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Extract from FIR PDF",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/nlp/extract-from-pdf", "host": ["{{aiBase}}"], "path": ["api", "nlp", "extract-from-pdf"] },
+            "body": { "mode": "raw", "raw": "{\n  \"case_id\": \"PUN-2024-0118\",\n  \"file_path\": \"data/generated/mock_firs/FIR_PUN_2024_0118.pdf\"\n}" }
+          }
+        },
+        {
+          "name": "Extract from CDR CSV",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/nlp/extract-from-cdr", "host": ["{{aiBase}}"], "path": ["api", "nlp", "extract-from-cdr"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"case_id\": \"PUN-2024-0118\",\n  \"file_path\": \"data/generated/mock_cdrs/cdr_case_PUN_2024_0118.csv\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Extract from bank CSV",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/nlp/extract-from-bank", "host": ["{{aiBase}}"], "path": ["api", "nlp", "extract-from-bank"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"case_id\": \"PUN-2024-0118\",\n  \"file_path\": \"data/generated/mock_bank/bank_case_1.csv\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 · Graph ML & Kingpin (AI)",
+      "item": [
+        {
+          "name": "Build network graph",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/graph/build/:caseId", "host": ["{{aiBase}}"], "path": ["api", "graph", "build", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entities\": [\n    { \"type\": \"PERSON\", \"value\": \"Ravi Jadhav\" },\n    { \"type\": \"PERSON\", \"value\": \"Imran Shaikh\" },\n    { \"type\": \"PHONE\", \"value\": \"9822012345\" }\n  ],\n  \"relations\": [\n    { \"source\": \"Ravi Jadhav\", \"target\": \"Imran Shaikh\", \"relation\": \"associate\" }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Kingpin scores (GET)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{aiBase}}/api/graph/kingpin-scores/:caseId", "host": ["{{aiBase}}"], "path": ["api", "graph", "kingpin-scores", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] }
+          }
+        },
+        {
+          "name": "Ghost Link predictor",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/graph/predict-links/:caseId", "host": ["{{aiBase}}"], "path": ["api", "graph", "predict-links", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entities\": [\n    { \"id\": \"Ravi Jadhav\", \"type\": \"PERSON\", \"value\": \"Ravi Jadhav\" },\n    { \"id\": \"Imran Shaikh\", \"type\": \"PERSON\", \"value\": \"Imran Shaikh\" },\n    { \"id\": \"Farhan Qureshi\", \"type\": \"PERSON\", \"value\": \"Farhan Qureshi\" }\n  ],\n  \"relations\": [\n    { \"source\": \"Ravi Jadhav\", \"target\": \"Imran Shaikh\", \"relation\": \"associate\" }\n  ],\n  \"threshold\": 0.15\n}"
+            }
+          }
+        },
+        {
+          "name": "Cluster suspects (DBSCAN)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/graph/cluster-suspects/:caseId", "host": ["{{aiBase}}"], "path": ["api", "graph", "cluster-suspects", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": { "mode": "raw", "raw": "{\n  \"suspects\": [\n    { \"id\": \"Ravi Jadhav\", \"vector\": [0.9, 0.8, 0.7] },\n    { \"id\": \"Imran Shaikh\", \"vector\": [0.85, 0.78, 0.72] },\n    { \"id\": \"Unrelated\", \"vector\": [0.1, 0.2, 0.1] }\n  ],\n  \"eps\": 0.8,\n  \"min_samples\": 2\n}" }
+          }
+        },
+        {
+          "name": "Network metrics",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{aiBase}}/api/graph/metrics/:caseId", "host": ["{{aiBase}}"], "path": ["api", "graph", "metrics", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 · Vision — CCTV Matcher (AI)",
+      "item": [
+        {
+          "name": "Match CCTV frame against suspects",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/vision/match-cctv", "host": ["{{aiBase}}"], "path": ["api", "vision", "match-cctv"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cctv_image_path\": \"data/cctv/frame_118.png\",\n  \"suspect_image_paths\": [\n    \"data/suspects/S-001.png\",\n    \"data/suspects/S-002.png\"\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Analyze suspect photo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/vision/analyze-suspect-photo", "host": ["{{aiBase}}"], "path": ["api", "vision", "analyze-suspect-photo"] },
+            "body": { "mode": "raw", "raw": "{\n  \"image_path\": \"data/suspects/S-001.png\"\n}" }
+          }
+        },
+        {
+          "name": "Describe CCTV scene",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/vision/describe-cctv", "host": ["{{aiBase}}"], "path": ["api", "vision", "describe-cctv"] },
+            "body": { "mode": "raw", "raw": "{\n  \"image_path\": \"data/cctv/frame_118.png\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 · Cross-Reference & MO (AI)",
+      "item": [
+        {
+          "name": "Index case into ChromaDB",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/vector/index/:caseId", "host": ["{{aiBase}}"], "path": ["api", "vector", "index", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"case_number\": \"PUN-2024-0118\",\n  \"fir_text\": \"Extortion call from 9822012345 demanding Rs 5,00,000...\",\n  \"source_date\": \"2024-11-12\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cross-reference case (serial offender)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/vector/cross-reference/:caseId", "host": ["{{aiBase}}"], "path": ["api", "vector", "cross-reference", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"case_id\": \"PUN-2024-0118\",\n  \"fir_text\": \"Extortion call demanding Rs 5,00,000, caller used motorcycle MH-12-AB-4521...\",\n  \"entities\": [\n    { \"type\": \"PERSON\", \"value\": \"Ravi Jadhav\" },\n    { \"type\": \"PHONE\", \"value\": \"9822012345\" }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "MO fingerprint",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/vector/mo-fingerprint/:caseId", "host": ["{{aiBase}}"], "path": ["api", "vector", "mo-fingerprint", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"case_id\": \"PUN-2024-0118\",\n  \"case_number\": \"PUN-2024-0118\",\n  \"fir_text\": \"The suspect first called at 8 PM, demanded money, and sent a courier to collect cash the next morning...\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Similar cases",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{aiBase}}/api/vector/similar-cases/:caseId?query=",
+              "host": ["{{aiBase}}"],
+              "path": ["api", "vector", "similar-cases", ":caseId"],
+              "query": [{ "key": "query", "value": "", "disabled": true }],
+              "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 · Financial Tracer (AI)",
+      "item": [
+        {
+          "name": "Trace money flow",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/financial/trace", "host": ["{{aiBase}}"], "path": ["api", "financial", "trace"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_account\": \"50100234567890\",\n  \"target_account\": \"11029988776655\",\n  \"transactions\": [\n    { \"from_account\": \"50100234567890\", \"to_account\": \"30201112223344\", \"amount\": 1000000, \"timestamp\": \"2024-10-01T10:00:00Z\" },\n    { \"from_account\": \"30201112223344\", \"to_account\": \"60230099887766\", \"amount\": 950000, \"timestamp\": \"2024-10-02T11:30:00Z\" },\n    { \"from_account\": \"60230099887766\", \"to_account\": \"11029988776655\", \"amount\": 900000, \"timestamp\": \"2024-10-03T09:15:00Z\" }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Laundering risk (POST)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/financial/laundering-risk/:caseId", "host": ["{{aiBase}}"], "path": ["api", "financial", "laundering-risk", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactions\": [\n    { \"from_account\": \"50100234567890\", \"to_account\": \"30201112223344\", \"amount\": 1000000, \"timestamp\": \"2024-10-01T10:00:00Z\" },\n    { \"from_account\": \"30201112223344\", \"to_account\": \"60230099887766\", \"amount\": 950000, \"timestamp\": \"2024-10-02T11:30:00Z\" },\n    { \"from_account\": \"60230099887766\", \"to_account\": \"11029988776655\", \"amount\": 900000, \"timestamp\": \"2024-10-03T09:15:00Z\" }\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 · LangGraph Agent (AI · SSE)",
+      "item": [
+        {
+          "name": "Analyze case (SSE stream)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/agents/analyze-case/:caseId", "host": ["{{aiBase}}"], "path": ["api", "agents", "analyze-case", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": { "mode": "raw", "raw": "{\n  \"stream\": true\n}" }
+          }
+        },
+        {
+          "name": "Analyze case (sync JSON)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/agents/analyze-case/:caseId/sync", "host": ["{{aiBase}}"], "path": ["api", "agents", "analyze-case", ":caseId", "sync"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": { "mode": "raw", "raw": "{}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 · Dossier (AI)",
+      "item": [
+        {
+          "name": "Generate dossier PDF",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{aiBase}}/api/dossier/generate/:caseId", "host": ["{{aiBase}}"], "path": ["api", "dossier", "generate", ":caseId"], "variable": [{ "key": "caseId", "value": "PUN-2024-0118" }] },
+            "body": { "mode": "raw", "raw": "{}" }
+          }
+        },
+        {
+          "name": "Download dossier",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{aiBase}}/api/dossier/download/:path", "host": ["{{aiBase}}"], "path": ["api", "dossier", "download", ":path"], "variable": [{ "key": "path", "value": "PUN-2024-0118/dossier.pdf" }] }
+          }
+        }
+      ]
+    }
+  ]
+}

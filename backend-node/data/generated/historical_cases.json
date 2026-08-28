@@ -1,0 +1,582 @@
+[
+  {
+    "id": "HC-001",
+    "case_number": "NASH-2023-491",
+    "title": "Unnatural death / theft / fraud incident 1",
+    "summary": "Reported case involving suspect Ravi Jadhav (alias Ravi Anna), phone 9822012345, vehicle MH-14-XY-1122, account 30201112223344. Occurred at Kolhapur. Modus operandi: highway loot.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Ravi Jadhav"
+      },
+      {
+        "type": "PHONE",
+        "value": "9822012345"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-14-XY-1122"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "11029988776655"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Sangli"
+      }
+    ],
+    "date": "2023-01-11"
+  },
+  {
+    "id": "HC-002",
+    "case_number": "MUM-2023-492",
+    "title": "Unnatural death / theft / fraud incident 2",
+    "summary": "Reported case involving suspect Sunil More (alias Sunny), phone 9876543210, vehicle MH-14-XY-1122, account 15022010101011. Occurred at Nashik. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Sunil More"
+      },
+      {
+        "type": "PHONE",
+        "value": "9876543210"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-12-AB-4521"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "30201112223344"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Mumbai"
+      }
+    ],
+    "date": "2023-01-18"
+  },
+  {
+    "id": "HC-003",
+    "case_number": "NAG-2023-330",
+    "title": "Unnatural death / theft / fraud incident 3",
+    "summary": "Reported case involving suspect Sandeep Wagh (alias Wagh), phone 9421122334, vehicle MH-12-AB-4521, account 11029988776655. Occurred at Pune. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Sandeep Wagh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9421122334"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-12-AB-4521"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "20120556677889"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nagpur"
+      }
+    ],
+    "date": "2023-08-20"
+  },
+  {
+    "id": "HC-004",
+    "case_number": "PUN-2023-198",
+    "title": "Unnatural death / theft / fraud incident 4",
+    "summary": "Reported case involving suspect Imran Shaikh (alias Chhota), phone 9867001122, vehicle MH-04-PQ-7788, account 60230099887766. Occurred at Sangli. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Imran Shaikh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9867001122"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-04-PQ-7788"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "60230099887766"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nashik"
+      }
+    ],
+    "date": "2023-05-24"
+  },
+  {
+    "id": "HC-005",
+    "case_number": "SOL-2023-929",
+    "title": "Unnatural death / theft / fraud incident 5",
+    "summary": "Reported case involving suspect Arjun Deshmukh (alias DJ), phone 9612345678, vehicle MH-13-EF-3344, account 70331144556677. Occurred at Pune. Modus operandi: bank fraud via phishing.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Arjun Deshmukh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9612345678"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-14-XY-1122"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "60230099887766"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nagpur"
+      }
+    ],
+    "date": "2023-11-03"
+  },
+  {
+    "id": "HC-006",
+    "case_number": "PUN-2023-300",
+    "title": "Unnatural death / theft / fraud incident 6",
+    "summary": "Reported case involving suspect Sunil More (alias Sunny), phone 9876543210, vehicle MH-13-EF-3344, account 50100234567890. Occurred at Pune. Modus operandi: highway loot.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Sunil More"
+      },
+      {
+        "type": "PHONE",
+        "value": "9876543210"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-04-PQ-7788"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "70331144556677"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Solapur"
+      }
+    ],
+    "date": "2023-01-21"
+  },
+  {
+    "id": "HC-007",
+    "case_number": "PUN-2023-635",
+    "title": "Unnatural death / theft / fraud incident 7",
+    "summary": "Reported case involving suspect Nitin Kale (alias Kale Sir), phone 9309988776, vehicle MH-04-PQ-7788, account 20120556677889. Occurred at Nagpur. Modus operandi: extortion ring.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Nitin Kale"
+      },
+      {
+        "type": "PHONE",
+        "value": "9309988776"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-12-AB-4521"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "15022010101011"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Ludhiana"
+      }
+    ],
+    "date": "2023-02-07"
+  },
+  {
+    "id": "HC-008",
+    "case_number": "NAG-2023-717",
+    "title": "Unnatural death / theft / fraud incident 8",
+    "summary": "Reported case involving suspect Gurpreet Singh (alias Happy), phone 9988776655, vehicle MH-04-PQ-7788, account 20120556677889. Occurred at Ludhiana. Modus operandi: extortion ring.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Gurpreet Singh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9988776655"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-13-EF-3344"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "20120556677889"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Mumbai"
+      }
+    ],
+    "date": "2023-08-19"
+  },
+  {
+    "id": "HC-009",
+    "case_number": "NASH-2023-401",
+    "title": "Unnatural death / theft / fraud incident 9",
+    "summary": "Reported case involving suspect Farhan Qureshi (alias Fairy), phone 9765432109, vehicle MH-01-CD-8890, account 60230099887766. Occurred at Mumbai. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Farhan Qureshi"
+      },
+      {
+        "type": "PHONE",
+        "value": "9765432109"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-04-PQ-7788"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "11029988776655"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nashik"
+      }
+    ],
+    "date": "2023-12-27"
+  },
+  {
+    "id": "HC-010",
+    "case_number": "NASH-2023-431",
+    "title": "Unnatural death / theft / fraud incident 10",
+    "summary": "Reported case involving suspect Arjun Deshmukh (alias DJ), phone 9612345678, vehicle MH-14-XY-1122, account 50100234567890. Occurred at Pune. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Arjun Deshmukh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9612345678"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-13-EF-3344"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "40110223344556"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Pune"
+      }
+    ],
+    "date": "2023-04-10"
+  },
+  {
+    "id": "HC-011",
+    "case_number": "NAG-2023-688",
+    "title": "Unnatural death / theft / fraud incident 11",
+    "summary": "Reported case involving suspect Arjun Deshmukh (alias DJ), phone 9612345678, vehicle MH-01-CD-8890, account 20120556677889. Occurred at Nashik. Modus operandi: extortion ring.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Arjun Deshmukh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9612345678"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-14-XY-1122"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "50100234567890"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Sangli"
+      }
+    ],
+    "date": "2023-08-15"
+  },
+  {
+    "id": "HC-012",
+    "case_number": "SOL-2023-377",
+    "title": "Unnatural death / theft / fraud incident 12",
+    "summary": "Reported case involving suspect Sunil More (alias Sunny), phone 9876543210, vehicle MH-14-XY-1122, account 50100234567890. Occurred at Kolhapur. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Sunil More"
+      },
+      {
+        "type": "PHONE",
+        "value": "9876543210"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-14-XY-1122"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "40110223344556"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Mumbai"
+      }
+    ],
+    "date": "2023-06-19"
+  },
+  {
+    "id": "HC-013",
+    "case_number": "NAG-2023-817",
+    "title": "Unnatural death / theft / fraud incident 13",
+    "summary": "Reported case involving suspect Manish Gupta (alias Mintu), phone 9543216780, vehicle MH-12-AB-4521, account 50100234567890. Occurred at Nagpur. Modus operandi: bank fraud via phishing.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Manish Gupta"
+      },
+      {
+        "type": "PHONE",
+        "value": "9543216780"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-12-AB-4521"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "11029988776655"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Kolhapur"
+      }
+    ],
+    "date": "2023-02-06"
+  },
+  {
+    "id": "HC-014",
+    "case_number": "SOL-2023-763",
+    "title": "Unnatural death / theft / fraud incident 14",
+    "summary": "Reported case involving suspect Gurpreet Singh (alias Happy), phone 9988776655, vehicle MH-12-AB-4521, account 20120556677889. Occurred at Ludhiana. Modus operandi: night-time housebreaking.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Gurpreet Singh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9988776655"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-01-CD-8890"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "15022010101011"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nagpur"
+      }
+    ],
+    "date": "2023-05-27"
+  },
+  {
+    "id": "HC-015",
+    "case_number": "NAG-2023-541",
+    "title": "Unnatural death / theft / fraud incident 15",
+    "summary": "Reported case involving suspect Arjun Deshmukh (alias DJ), phone 9612345678, vehicle MH-01-CD-8890, account 15022010101011. Occurred at Kolhapur. Modus operandi: extortion ring.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Arjun Deshmukh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9612345678"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-01-CD-8890"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "30201112223344"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nagpur"
+      }
+    ],
+    "date": "2023-01-12"
+  },
+  {
+    "id": "HC-016",
+    "case_number": "NASH-2023-910",
+    "title": "Unnatural death / theft / fraud incident 16",
+    "summary": "Reported case involving suspect Imran Shaikh (alias Chhota), phone 9867001122, vehicle MH-12-AB-4521, account 15022010101011. Occurred at Sangli. Modus operandi: extortion ring.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Imran Shaikh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9867001122"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-14-XY-1122"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "50100234567890"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Kolhapur"
+      }
+    ],
+    "date": "2023-12-05"
+  },
+  {
+    "id": "HC-017",
+    "case_number": "NAG-2023-191",
+    "title": "Unnatural death / theft / fraud incident 17",
+    "summary": "Reported case involving suspect Manish Gupta (alias Mintu), phone 9543216780, vehicle MH-04-PQ-7788, account 50100234567890. Occurred at Nagpur. Modus operandi: highway loot.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Manish Gupta"
+      },
+      {
+        "type": "PHONE",
+        "value": "9543216780"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-04-PQ-7788"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "15022010101011"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Kolhapur"
+      }
+    ],
+    "date": "2023-04-17"
+  },
+  {
+    "id": "HC-018",
+    "case_number": "NAG-2023-664",
+    "title": "Unnatural death / theft / fraud incident 18",
+    "summary": "Reported case involving suspect Manish Gupta (alias Mintu), phone 9543216780, vehicle MH-01-CD-8890, account 40110223344556. Occurred at Sangli. Modus operandi: extortion ring.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Manish Gupta"
+      },
+      {
+        "type": "PHONE",
+        "value": "9543216780"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-13-EF-3344"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "20120556677889"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Nagpur"
+      }
+    ],
+    "date": "2023-05-28"
+  },
+  {
+    "id": "HC-019",
+    "case_number": "NASH-2023-444",
+    "title": "Unnatural death / theft / fraud incident 19",
+    "summary": "Reported case involving suspect Gurpreet Singh (alias Happy), phone 9988776655, vehicle MH-14-XY-1122, account 15022010101011. Occurred at Pune. Modus operandi: highway loot.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Gurpreet Singh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9988776655"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-14-XY-1122"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "15022010101011"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Pune"
+      }
+    ],
+    "date": "2023-03-07"
+  },
+  {
+    "id": "HC-020",
+    "case_number": "MUM-2023-847",
+    "title": "Unnatural death / theft / fraud incident 20",
+    "summary": "Reported case involving suspect Sandeep Wagh (alias Wagh), phone 9421122334, vehicle MH-13-EF-3344, account 15022010101011. Occurred at Mumbai. Modus operandi: highway loot.",
+    "entities": [
+      {
+        "type": "PERSON",
+        "value": "Sandeep Wagh"
+      },
+      {
+        "type": "PHONE",
+        "value": "9421122334"
+      },
+      {
+        "type": "VEHICLE",
+        "value": "MH-12-AB-4521"
+      },
+      {
+        "type": "BANK_ACCOUNT",
+        "value": "11029988776655"
+      },
+      {
+        "type": "LOCATION",
+        "value": "Kolhapur"
+      }
+    ],
+    "date": "2023-11-16"
+  }
+]

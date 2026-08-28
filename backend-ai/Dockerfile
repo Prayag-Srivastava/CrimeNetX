@@ -1,0 +1,18 @@
+# CrimeNetX — FastAPI AI service
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps for PyMuPDF/reportlab
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m spacy download en_core_web_sm
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,44 @@
+# --- Dependencies ---
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Build output ---
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# --- Environment files (NEVER commit secrets) ---
+.env
+.env.local
+.env.*.local
+!/.env.example
+!frontend/.env.local.example
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Generated mock artifacts ---
+backend-ai/data/generated/
+
+# --- ChromaDB persistence ---
+chroma_data/
+backend-ai/chroma_data/
+
+# --- Generated dossier artifacts ---
+backend-ai/app/generated_dossiers/
