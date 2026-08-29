@@ -10,6 +10,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 
 router.post("/upload-url", requireRole("INVESTIGATOR"), evidence.getUploadUrl);
 router.post("/", requireRole("INVESTIGATOR"), evidence.registerEvidence);
+router.post(
+  "/:caseId/import-nlp",
+  requireRole("INVESTIGATOR"),
+  evidence.importNlpResults
+);
 router.post("/local-upload", upload.single("file"), evidence.localUpload);
 router.get("/object/:key(*)", evidence.getObject);
 router.get("/case/:id", evidence.listEvidence);

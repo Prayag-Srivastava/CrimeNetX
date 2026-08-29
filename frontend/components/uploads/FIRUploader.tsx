@@ -1,7 +1,8 @@
 "use client";
 /**
  * FIRUploader — uploads an FIR PDF: presigned S3 URL -> register metadata+hash
- * -> then runs NLP entity extraction via the AI proxy.
+ * -> sends the original PDF to the AI service for NLP extraction
+ * -> persists entities/relations into the investigation network.
  */
 import { useState } from "react";
 import { Upload } from "lucide-react";
@@ -44,7 +45,20 @@ export function FIRUploader({ caseId, onUploaded }: { caseId: string; onUploaded
         fd.append("file", file);
         await api.post(`${uploadUrl}`, fd, { headers: { "Content-Type": "multipart/form-data" } });
       } else {
-        await fetch(presign.uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type || "application/pdf" } });
+        const uploadResponse = await fetch(presign.uploadUrl, {
+  method: "PUT",
+  body: file,
+  headers: {
+    "Content-Type": file.type || "application/pdf",
+  },
+});
+
+if (!uploadResponse.ok) {
+  const errorText = await uploadResponse.text();
+  throw new Error(
+    `S3 upload failed (${uploadResponse.status}): ${errorText || uploadResponse.statusText}`
+  );
+}
       }
 
       setProgress("Computing SHA-256…");
@@ -60,28 +74,50 @@ export function FIRUploader({ caseId, onUploaded }: { caseId: string; onUploaded
       });
       toast("FIR registered", `${file.name} · hash ${hash.slice(0, 12)}…`);
 
-      setProgress("Running NLP entity extraction…");
+            setProgress("Parsing FIR with AI…");
+
       try {
-        const text = await extractPdfText(file);
+        // Send the ORIGINAL PDF to the AI backend.
+        // The backend will parse the PDF server-side and run
+        // spaCy + regex + Groq extraction.
+        const formData = new FormData();
+        formData.append("file", file);
+
         const { data: nlpResult } = await aiApi.post<{
-  entities: Array<{
-    type: string;
-    value: string;
-    confidence: number;
-    layer: string;
-    attributes?: Record<string, unknown>;
-  }>;
-  relations: Array<Record<string, unknown>>;
-  llm_used: boolean;
-  warnings: string[];
-}>("/nlp/extract-entities", {
-  caseId,
-  source_name: file.name,
-  text: text.slice(0, 12000),
-});
+          entities: Array<{
+            type: string;
+            value: string;
+            confidence: number;
+            layer: string;
+            attributes?: Record<string, unknown>;
+          }>;
+          relations: Array<Record<string, unknown>>;
+          llm_used: boolean;
+          warnings: string[];
+        }>("/nlp/extract-from-pdf", formData);
 
-      setExtractedEntities(nlpResult.entities);
+        setExtractedEntities(nlpResult.entities ?? []);
 
+        if (nlpResult.warnings?.length) {
+          console.warn("NLP warnings:", nlpResult.warnings);
+        }
+
+        // Persist extracted entities + relations and rebuild
+        // the investigation network.
+        setProgress("Saving entities and rebuilding network…");
+
+        await api.post(`/evidence/${caseId}/import-nlp`, {
+          source: file.name,
+          entities: nlpResult.entities ?? [],
+          relations: nlpResult.relations ?? [],
+        });
+
+        toast(
+          "NLP processing complete",
+          `${nlpResult.entities?.length ?? 0} entities and ${
+            nlpResult.relations?.length ?? 0
+          } relationships imported`
+        );
       } catch (err) {
         toast(
           "NLP extraction failed",
@@ -89,7 +125,6 @@ export function FIRUploader({ caseId, onUploaded }: { caseId: string; onUploaded
           "destructive"
         );
       }
-
       setProgress("");
       setFile(null);
       onUploaded?.();
@@ -120,7 +155,11 @@ export function FIRUploader({ caseId, onUploaded }: { caseId: string; onUploaded
 }}
           className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-xs file:text-primary-foreground"
         />
-        {progress && <div className="text-xs text-muted-foreground">{progress}…</div>}
+        {progress && (
+  <div className="text-xs text-muted-foreground">
+    {progress}
+  </div>
+)}
         <Button onClick={() => void handleUpload()} disabled={!file || busy} className="w-full">
           <Upload className="h-4 w-4" />
           {busy ? "Uploading…" : "Upload FIR"}
@@ -174,20 +213,3 @@ export async function sha256(file: File): Promise<string> {
     .join("");
 }
 
-/** Best-effort PDF text extraction in the browser (for the NLP step). */
-async function extractPdfText(file: File): Promise<string> {
-  try {
-    const buf = await file.arrayBuffer();
-    // Minimal PDF text extraction — production would use pdf.js.
-    const decoder = new TextDecoder("latin1");
-    const str = decoder.decode(buf);
-    const streamMatch = str.match(/stream\r?\n([\s\S]*?)endstream/g) ?? [];
-    return streamMatch
-      .map((s) => s.replace(/^stream\r?\n/, "").replace(/endstream$/, ""))
-      .filter((s) => /^[\x20-\x7E]*$/.test(s))
-      .join(" ")
-      .slice(0, 20000);
-  } catch {
-    return "";
-  }
-}

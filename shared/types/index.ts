@@ -152,6 +152,8 @@ export interface DashboardPayload {
 export interface LinkPrediction {
   source: string;
   target: string;
+  source_label?: string;
+  target_label?: string;
   score: number;
   algorithm: string;
   rationale: string;

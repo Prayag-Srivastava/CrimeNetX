@@ -90,23 +90,40 @@ export function CriminalNetworkGraph({
   );
 
   const flowEdges: Edge[] = useMemo(
-    () =>
-      edges.map((e) => ({
+  () =>
+    edges.map((e) => {
+      const isHypothesis =
+        e.evidence === "Investigator-accepted ghost link prediction";
+
+      const isFinancialTransfer =
+        e.relationType === "financial_transfer";
+
+      return {
         id: e.id,
         source: e.sourceId,
         target: e.targetId,
-        label: e.relationType.replace(/_/g, " "),
-        animated: e.relationType === "financial_transfer", // animated money flows
+        label: isHypothesis
+          ? "accepted hypothesis"
+          : e.relationType.replace(/_/g, " "),
+        animated: isFinancialTransfer,
         markerEnd: { type: MarkerType.ArrowClosed },
         style: {
-          stroke: e.relationType === "financial_transfer" ? "#dc2626" : "#94a3b8",
+          stroke: isFinancialTransfer ? "#dc2626" : "#94a3b8",
           strokeWidth: Math.min(1 + e.weight, 5),
+          strokeDasharray: isHypothesis ? "6 4" : undefined,
         },
-        labelStyle: { fontSize: 10, fill: "#64748b" },
-        labelBgStyle: { fill: "#ffffff", fillOpacity: 0.85 },
-      })),
-    [edges]
-  );
+        labelStyle: {
+          fontSize: 10,
+          fill: isHypothesis ? "#7c3aed" : "#64748b",
+        },
+        labelBgStyle: {
+          fill: "#ffffff",
+          fillOpacity: 0.85,
+        },
+      };
+    }),
+  [edges]
+);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {

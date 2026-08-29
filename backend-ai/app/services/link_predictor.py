@@ -90,6 +90,8 @@ def predict_links(g: nx.DiGraph, threshold: float = 0.15, top_n: int = 30) -> li
         LinkPrediction(
             source=pair[0],
             target=pair[1],
+            source_label=str(g.nodes[pair[0]].get("label", pair[0])),
+            target_label=str(g.nodes[pair[1]].get("label", pair[1])),
             score=score,
             algorithm="ensemble(common_neighbors+jaccard+adamic_adar)",
             rationale=(

@@ -67,13 +67,44 @@ export default function NetworkPage() {
     }
   }, [id, loadNetwork, setNetworkLoading, toast]);
 
+  const displayNodes = useMemo(() => network?.nodes ?? [], [network]);
+  const displayEdges = useMemo(() => network?.edges ?? [], [network]);
+  const nodeLabelById = useMemo(
+    () => new Map(displayNodes.map((n) => [n.id, n.label])),
+    [displayNodes]
+  );
+  useEffect(() => {
+    console.log("NETWORK NODE IDS:", displayNodes.map((n) => ({
+      id: n.id,
+      label: n.label,
+    })));
+
+    console.log("PREDICTION IDS:", predictions.map((p) => ({
+      source: p.source,
+      target: p.target,
+    })));
+
+    console.log("MAP LOOKUPS:", predictions.map((p) => ({
+      source: nodeLabelById.get(p.source),
+      target: nodeLabelById.get(p.target),
+    })));
+  }, [displayNodes, predictions, nodeLabelById]);
+
   const predictLinks = useCallback(async () => {
     if (!network) return;
     try {
       const { data } = await aiApi.post<{ predictions: LinkPrediction[] }>(`/graph/predict-links/${id}`, {
         case_id: id,
-        entities: network.nodes.map((n) => ({ id: n.id, type: "PERSON", value: n.label })),
-        relations: network.edges.map((e) => ({ source: e.sourceId, target: e.targetId, relation: e.relationType })),
+        entities: network.nodes.map((n) => ({
+          id: n.id,
+          type: "PERSON",
+          value: n.label,
+        })),
+        relations: network.edges.map((e) => ({
+          source: e.sourceId,
+          target: e.targetId,
+          relation: e.relationType,
+        })),
         threshold: 0.1,
       });
       setPredictions(data.predictions);
@@ -86,19 +117,27 @@ export default function NetworkPage() {
   const acceptPrediction = useCallback(
     async (p: LinkPrediction, accept: boolean) => {
       try {
-        await api.post(`/case/${id}/predictions/review`, { source: p.source, target: p.target, accepted: accept, score: p.score });
+        await api.post(`/case/${id}/predictions/review`, {
+          source: p.source,
+          target: p.target,
+          source_label: nodeLabelById.get(p.source),
+          target_label: nodeLabelById.get(p.target),
+          accepted: accept,
+          score: p.score,
+        });
         setPredictions((prev) => prev.filter((x) => !(x.source === p.source && x.target === p.target)));
-        toast(accept ? "Ghost link accepted" : "Prediction dismissed", `${p.source} ↔ ${p.target}`);
+        toast(
+          accept ? "Ghost link accepted" : "Prediction dismissed",
+          `${nodeLabelById.get(p.source) ?? p.source} ↔ ${nodeLabelById.get(p.target) ?? p.target}`
+        );
         if (accept) await loadNetwork();
       } catch (err) {
         toast("Error", extractErrorMessage(err), "destructive");
       }
     },
-    [id, loadNetwork, toast]
+    [id, loadNetwork, toast, nodeLabelById]
   );
 
-  const displayNodes = useMemo(() => network?.nodes ?? [], [network]);
-  const displayEdges = useMemo(() => network?.edges ?? [], [network]);
 
   return (
     <div className="space-y-5">
@@ -150,9 +189,13 @@ export default function NetworkPage() {
               {predictions.slice(0, 6).map((p, i) => (
                 <div key={i} className="rounded-lg border p-3">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium">{p.source}</span>
+                    <span className="font-medium">
+                      {nodeLabelById.get(p.source) ?? `UNKNOWN: ${p.source}`}
+                    </span>
                     <span className="text-muted-foreground">↔</span>
-                    <span className="font-medium">{p.target}</span>
+                    <span className="font-medium">
+                      {nodeLabelById.get(p.target) ?? `UNKNOWN: ${p.target}`}
+                    </span>
                     <Badge variant={p.score > 0.5 ? "warning" : "secondary"}>{Math.round(p.score * 100)}%</Badge>
                   </div>
                   <div className="mt-2 flex gap-2">

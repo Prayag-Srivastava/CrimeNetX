@@ -120,13 +120,43 @@ def _llm_layer(text: str, source: str) -> tuple[list[Entity], list[dict[str, Any
         relations: list[LlmRelation]
 
     prompt = (
-        "Extract from this Indian police FIR text:\n"
-        "1. aliases: nicknames / street names / aka references for any person "
-        "   (value = the alias as written, canonical_name = the person's full name if known).\n"
-        "2. relations: inferred relationships between named entities "
-        "   (family, associate, same_organization, phone_call, financial_transfer).\n"
-        f"FIR TEXT:\n{text[:12000]}\nSOURCE: {source}"
-    )
+    "You are analyzing an Indian police FIR for an investigation graph.\n\n"
+    "Extract TWO things:\n\n"
+
+    "1. ALIASES:\n"
+    "Identify nicknames, aliases, street names, or aka references for "
+    "persons.\n"
+    "For each alias, return the alias exactly as written and the person's "
+    "canonical full name when known.\n\n"
+
+    "2. RELATIONS:\n"
+    "Identify relationships explicitly stated or strongly supported by "
+    "the FIR between entities.\n\n"
+
+    "Allowed relation types:\n"
+    "- family: family relationship\n"
+    "- associate: persons or entities explicitly associated\n"
+    "- same_organization: belongs to the same organization/group\n"
+    "- phone_call: a person/entity communicated using a phone number\n"
+    "- financial_transfer: money/account transaction relationship\n"
+    "- co_location: entities connected by being at the same location\n\n"
+
+    "IMPORTANT RULES FOR RELATIONS:\n"
+    "- source and target MUST be copied exactly from entity names/values "
+    "that appear in the FIR.\n"
+    "- Do not invent entities.\n"
+    "- Prefer explicit relationships over speculation.\n"
+    "- If a person is explicitly associated with a phone number, vehicle, "
+    "bank account, organization, or location, include that relationship.\n"
+    "- If two persons are described as working together, meeting, "
+    "communicating, or participating in the same incident, include an "
+    "associate relationship.\n"
+    "- Return multiple relations when multiple relationships are present.\n"
+    "- Include the exact textual evidence supporting each relation.\n\n"
+
+    f"FIR TEXT:\n{text[:12000]}\n\n"
+    f"SOURCE: {source}"
+)
     result = groq_structured(prompt, LlmOut, temperature=0.1)
     if result is None:
         return [], []
@@ -185,29 +215,108 @@ def extract_entities(text: str, source_name: str = "manual", case_id: str | None
     return EntityExtractionResponse(entities=entities, relations=relations, llm_used=bool(llm_ents), warnings=warnings)
 
 
-def _cooccurrence_relations(text: str, entities: list[Entity], source: str) -> list[dict[str, Any]]:
-    """Deterministic fallback relations for co-mentioned entities."""
-    people = [e for e in entities if e.type == EntityType.PERSON and e.layer == "spacy"]
-    if len(people) < 2:
+def _cooccurrence_relations(
+    text: str,
+    entities: list[Entity],
+    source: str,
+) -> list[dict[str, Any]]:
+    """
+    Deterministic fallback relation extraction.
+
+    Creates relationships between entities that occur together in the same
+    sentence. This is intentionally conservative: it does not claim a
+    specific criminal relationship, only that the entities are associated
+    within the same FIR context.
+
+    The LLM remains responsible for stronger semantic relations such as
+    family, financial_transfer, phone_call, etc.
+    """
+    import re
+
+    # Remove duplicate entities by type + normalized value.
+    unique: dict[tuple[str, str], Entity] = {}
+
+    for entity in entities:
+        value = entity.value.strip()
+        if not value:
+            continue
+
+        key = (entity.type.value, value.upper())
+
+        if key not in unique:
+            unique[key] = entity
+
+    usable_entities = list(unique.values())
+
+    if len(usable_entities) < 2:
         return []
+
     relations: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for para in text.split("\n\n"):
-        para_names = [e.value for e in people if e.value.lower() in para.lower()]
-        for i, a in enumerate(para_names):
-            for b in para_names[i + 1 :]:
-                key = (min(a, b), max(a, b))
-                if key in seen:
+    seen: set[tuple[str, str, str]] = set()
+
+    # Split FIR into sentences / reasonably small textual units.
+    sentences = re.split(r"(?<=[.!?])\s+|\n+", text)
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+
+        if not sentence:
+            continue
+
+        mentioned: list[Entity] = []
+
+        for entity in usable_entities:
+            value = entity.value.strip()
+
+            if len(value) < 2:
+                continue
+
+            if value.lower() in sentence.lower():
+                mentioned.append(entity)
+
+        # Need at least two entities in the same textual unit.
+        if len(mentioned) < 2:
+            continue
+
+        # Create pairwise association links.
+        for i, source_entity in enumerate(mentioned):
+            for target_entity in mentioned[i + 1:]:
+                source_value = source_entity.value.strip()
+                target_value = target_entity.value.strip()
+
+                if source_value.lower() == target_value.lower():
                     continue
+
+                key = (
+                    source_value.upper(),
+                    target_value.upper(),
+                    RelationType.ASSOCIATE.value,
+                )
+
+                # Treat the relationship as undirected for deduplication.
+                reverse_key = (
+                    target_value.upper(),
+                    source_value.upper(),
+                    RelationType.ASSOCIATE.value,
+                )
+
+                if key in seen or reverse_key in seen:
+                    continue
+
                 seen.add(key)
+
                 relations.append(
                     {
-                        "source": a,
-                        "target": b,
+                        "source": source_value,
+                        "target": target_value,
                         "relation": RelationType.ASSOCIATE.value,
-                        "evidence": f"Co-mentioned in FIR paragraph ({source})",
+                        "evidence": (
+                            f"Entities co-mentioned in FIR text "
+                            f"({source})"
+                        ),
                     }
                 )
+
     return relations
 
 

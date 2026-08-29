@@ -131,6 +131,8 @@ class KingpinScoreRow(BaseModel):
 class LinkPrediction(BaseModel):
     source: str
     target: str
+    source_label: str = ""
+    target_label: str = ""
     score: float = Field(ge=0.0, le=1.0)
     algorithm: str
     rationale: str = ""

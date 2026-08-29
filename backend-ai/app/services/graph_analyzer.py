@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from weakref import ref
 
 import networkx as nx
 
@@ -49,11 +50,20 @@ def build_graph(
     meta: dict[str, dict[str, Any]] = {}  # entity_id -> attributes
 
     for ent in entities:
-        # Entities may arrive without ids (raw extraction output) — derive a
-        # stable id from type+value so graph nodes remain consistent.
-        eid = str(ent.get("id") or f"{ent.get('type', 'ENTITY')}:{ent.get('value', '')}")
+    # Preserve the canonical database Entity ID whenever available.
+    # Only derive an ID for raw entities that do not have one.
+        eid = str(
+            ent.get("id")
+            or f"{ent.get('type', 'ENTITY')}:{ent.get('value', '')}"
+        )
+
         g.add_node(eid)
-        meta[eid] = {"label": ent["value"], "entity_type": ent["type"]}
+
+        meta[eid] = {
+            "label": str(ent.get("value", "")),
+            "entity_type": str(ent.get("type", "ENTITY")),
+            "entity_id": eid,
+        }
 
     # Value -> node-id index so relations that reference entity *values*
     # (e.g. LLM output) can be resolved even when ids differ.
@@ -63,8 +73,13 @@ def build_graph(
         value_index.setdefault(str(ent["value"]).upper(), eid)
 
     def resolve(ref: str) -> str | None:
+        ref = str(ref).strip()
+
+    # First: exact canonical entity ID.
         if ref in g:
             return ref
+
+    # Second: entity value.
         return value_index.get(ref.upper())
 
     for rel in relations:
@@ -127,35 +142,97 @@ def _eigenvector_safe(g: nx.DiGraph) -> dict[str, float]:
 
 
 def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
-    """Run the 4 centrality algorithms and blend into a composite score."""
+    """Run centrality analysis and calculate investigation-oriented scores.
+
+    Isolated nodes are retained in the graph for visibility/provenance, but
+    they cannot be kingpins or brokers because they have no relationships.
+    """
+
     if g.number_of_nodes() == 0:
         return {}
 
-    # PageRank on the directed graph with a custom alpha (0.85 default).
     pagerank = nx.pagerank(g, alpha=0.85, weight="weight")
     betweenness = nx.betweenness_centrality(g, weight="weight")
     degree = nx.degree_centrality(g)
     eigenvector = _eigenvector_safe(g)
 
-    comps: dict[str, float] = {}
-    zs = {
-        "pagerank": _zscore_map(pagerank),
-        "betweenness": _zscore_map(betweenness),
-        "degree": _zscore_map(degree),
-        "eigenvector": _zscore_map(eigenvector),
-    }
-    for node in g.nodes:
-        raw = sum(zs[k][node] * w for k, w in CENTRALITY_WEIGHTS.items())
-        comps[node] = round(_sigmoid(raw) * 100, 2)
-
     rows: dict[str, KingpinScoreRow] = {}
+
+    # Only connected nodes participate in the kingpin/broker scoring.
+    connected_nodes = {
+        node
+        for node in g.nodes
+        if g.degree(node) > 0
+    }
+
+    # If the graph contains no relationships, every node is isolated.
+    if not connected_nodes:
+        for node in g.nodes:
+            rows[node] = KingpinScoreRow(
+                entity_id=node,
+                label="",
+                pagerank=round(pagerank.get(node, 0.0), 6),
+                betweenness=0.0,
+                degree=0.0,
+                eigenvector=round(eigenvector.get(node, 0.0), 6),
+                composite=0.0,
+                role=GraphRole.EXECUTOR,
+            )
+        return rows
+
+    # Calculate robust z-scores only across nodes that actually participate
+    # in relationships.
+    connected_pagerank = {
+        n: pagerank[n] for n in connected_nodes
+    }
+    connected_betweenness = {
+        n: betweenness[n] for n in connected_nodes
+    }
+    connected_degree = {
+        n: degree[n] for n in connected_nodes
+    }
+    connected_eigenvector = {
+        n: eigenvector[n] for n in connected_nodes
+    }
+
+    zs = {
+        "pagerank": _zscore_map(connected_pagerank),
+        "betweenness": _zscore_map(connected_betweenness),
+        "degree": _zscore_map(connected_degree),
+        "eigenvector": _zscore_map(connected_eigenvector),
+    }
+
     for node in g.nodes:
-        score = comps[node]
+        # No relationships = no network role.
+        if node not in connected_nodes:
+            rows[node] = KingpinScoreRow(
+                entity_id=node,
+                label="",
+                pagerank=round(pagerank.get(node, 0.0), 6),
+                betweenness=0.0,
+                degree=0.0,
+                eigenvector=round(eigenvector.get(node, 0.0), 6),
+                composite=0.0,
+                role=GraphRole.EXECUTOR,
+            )
+            continue
+
+        raw = sum(
+            zs[k][node] * CENTRALITY_WEIGHTS[k]
+            for k in CENTRALITY_WEIGHTS
+        )
+
+        # Convert the relative network-centrality score into 0..100.
+        score = round(_sigmoid(raw) * 100, 2)
+
         role = (
-            GraphRole.KINGPIN if score > 70
-            else GraphRole.BROKER if score >= 40
+            GraphRole.KINGPIN
+            if score > 70
+            else GraphRole.BROKER
+            if score >= 40
             else GraphRole.EXECUTOR
         )
+
         rows[node] = KingpinScoreRow(
             entity_id=node,
             label="",
@@ -166,6 +243,7 @@ def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
             composite=score,
             role=role,
         )
+
     return rows
 
 
