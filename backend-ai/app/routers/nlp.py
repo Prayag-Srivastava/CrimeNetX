@@ -1,5 +1,6 @@
 """NLP endpoints — entity extraction from FIR text/PDF, CDR CSV, bank CSV."""
 from __future__ import annotations
+from app.services.crime_simulator import generate_execution_simulation
 
 import io
 from typing import Any
@@ -77,6 +78,14 @@ async def extract_from_cdr_endpoint(file: UploadFile = File(...)):
         )
     return extract_from_cdr(normalized)
 
+@router.post("/generate-simulation")
+async def generate_simulation_endpoint(payload: dict):
+    case_title = payload.get("title", "")
+    case_description = payload.get("description", "")
+    entities = payload.get("entities", [])
+    
+    result = generate_execution_simulation(case_title, case_description, entities)
+    return result
 
 @router.post("/extract-from-bank", response_model=EntityExtractionResponse)
 async def extract_from_bank_endpoint(file: UploadFile = File(...)):
