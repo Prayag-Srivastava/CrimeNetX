@@ -1,0 +1,29 @@
+{
+  "document_id": "PUN-2024-0118_54a93d16",
+  "case_id": "PUN-2024-0118",
+  "original_filename": "hindi_fir_test_aliases.pdf",
+  "original_file_hash": "f76fd8cadc203c6f983f9f177b715181909e5abe2677a68fe40b18fa29c95c0d",
+  "pipeline_version": "v2.1-ocr-indictrans-splink",
+  "stages": {
+    "ocr": {
+      "raw_text_hash": "26b18245cdba37a166a681eed646610ca79e005acdd22b9bb818f67e03b3910f",
+      "language": "eng+hin",
+      "confidence": 87.76,
+      "raw_text_file": "data\\raw_texts\\PUN-2024-0118\\PUN-2024-0118_54a93d16_raw.txt"
+    },
+    "translation": {
+      "translated_text_hash": "439e1fc560c5ae3b89f39b302d808e6e02a007c252b863cf29133f07cefd4440",
+      "source_language": "hi",
+      "model": "ai4bharat/indictrans2-indic-en-dist-200M",
+      "translated_text_file": "data\\raw_texts\\PUN-2024-0118\\PUN-2024-0118_54a93d16_translated.txt"
+    }
+  },
+  "hash_chain": {
+    "step_1_original_file": "f76fd8cadc203c6f983f9f177b715181909e5abe2677a68fe40b18fa29c95c0d",
+    "step_2_ocr_text": "26b18245cdba37a166a681eed646610ca79e005acdd22b9bb818f67e03b3910f",
+    "step_3_translated_text": "439e1fc560c5ae3b89f39b302d808e6e02a007c252b863cf29133f07cefd4440"
+  },
+  "timestamps": {
+    "ingested_at": "2026-09-05T14:05:58.747203+00:00"
+  }
+}

@@ -1,7 +1,8 @@
-// ===========================================================================
-// CrimeNetX — Prisma schema (SIH26189)
-// Comprehensive relational model for the investigation intelligence platform.
-// ===========================================================================
+// ============================================================
+// CrimeNetX — Updated Prisma Schema
+// New models: DocumentProvenance, EntityResolutionLog
+// Modified models: NetworkNode, NetworkEdge, Case
+// ============================================================
 
 generator client {
   provider = "prisma-client-js"
@@ -12,55 +13,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------------------------------------------------------------------------
-// Enums
-// ---------------------------------------------------------------------------
+// ── ENUMS ──────────────────────────────────────────────────
+
 enum Role {
+  ADMIN
   INVESTIGATOR
-  DSP
-  SP
-  DGP
-}
-
-enum CaseStatus {
-  OPEN
-  UNDER_INVESTIGATION
-  PENDING_REVIEW
-  CLOSED
-  COLD
-}
-
-enum CasePriority {
-  LOW
-  MEDIUM
-  HIGH
-  CRITICAL
-}
-
-enum EntityType {
-  PERSON
-  LOCATION
-  PHONE
-  VEHICLE
-  ORGANIZATION
-  BANK_ACCOUNT
-  DATE
-  ALIAS
-  CRYPTO_WALLET
-}
-
-enum CaseSource {
-  MANUAL
-  CCTNS
-  EMAIL
-  WHATSAPP
-  BULK
-}
-
-enum GraphRole {
-  KINGPIN
-  BROKER
-  EXECUTOR
+  ANALYST
+  CONSTABLE
+  SUPERVISOR
 }
 
 enum RelationType {
@@ -70,316 +30,277 @@ enum RelationType {
   associate
   same_organization
   co_location
+  co_accused
+  victim_of
+  witness_to
 }
 
-enum EvidenceType {
+enum PersonRole {
+  VICTIM
+  WITNESS
+  ACCUSED
+  ASSOCIATE
+  UNKNOWN
+}
+
+enum DocumentType {
   FIR
   CDR
-  BANK
-  PHOTO
-  DOCUMENT
-  CCTV
+  BANK_STATEMENT
+  SURVEILLANCE_NOTE
+  OSINT_CAPTURE
+  COMPLAINT
 }
 
-enum AlertType {
-  ANOMALY
-  HIGH_RISK
-  GHOST_LINK
-  CROSS_REFERENCE
-  NETWORK_UPDATE
-  EVIDENCE_UPLOAD
-  LAUNDERING_RISK
+enum OCRStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  SKIPPED
 }
 
-enum AlertSeverity {
-  INFO
-  LOW
-  MEDIUM
-  HIGH
-  CRITICAL
+enum TranslationStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  SKIPPED_NOT_NEEDED
 }
 
-// ---------------------------------------------------------------------------
-// Users & audit
-// ---------------------------------------------------------------------------
+enum ResolutionDecision {
+  MERGE
+  SPLIT
+  REVIEW
+  AUTO_MERGED
+  AUTO_REJECTED
+}
+
+enum AdmissibilityStatus {
+  CERTIFIED
+  DEFECTIVE
+  DEMANDED_NOT_GIVEN
+  NOT_SOUGHT
+  PENDING
+}
+
+enum TimelineState {
+  RECORDED
+  DELAYED
+  IMPOSSIBLE
+  ABSENT
+}
+
+enum EdgeInkType {
+  OBSERVED
+  PREDICTED
+  HYPOTHESISED
+}
+
+// ── CORE MODELS ────────────────────────────────────────────
+
 model User {
-  id             String        @id @default(cuid())
-  email          String        @unique
-  name           String
-  passwordHash   String
-  role           Role          @default(INVESTIGATOR)
-  department     String        @default("")
-  badgeNumber    String        @default("")
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-
-  assignedCases  Case[]        @relation("AssignedCases")
-  uploadedEvidence Evidence[]  @relation("UploadedEvidence")
-  generatedDossiers Dossier[]
-  auditLogs      AuditLog[]
-  refreshTokens  RefreshToken[]
-
-  @@index([role])
-  @@index([email])
-}
-
-model RefreshToken {
   id        String   @id @default(cuid())
-  token     String   @unique
-  userId    String
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(INVESTIGATOR)
+  badgeId   String?  @unique
+  station   String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@index([userId])
-  @@index([expiresAt])
+  cases     Case[]
+  auditLogs AuditLog[]
 }
+
+model Case {
+  id          String   @id @default(cuid())
+  firNumber   String   @unique
+  title       String
+  description String?  @db.Text
+  status      String   @default("OPEN")
+  district    String?
+  state       String?
+  offenceType String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy   String
+  user        User     @relation(fields: [createdBy], references: [id])
+
+  nodes             NetworkNode[]
+  edges             NetworkEdge[]
+  documents         DocumentProvenance[]
+  resolutionLogs    EntityResolutionLog[]
+  evidenceItems     EvidenceItem[]
+  auditLogs         AuditLog[]
+}
+
+// ── DOCUMENT PROVENANCE (NEW) ──────────────────────────────
+// Stores the complete chain from raw file → OCR → Translation → NER
+// This is the court-admissible provenance record
+
+model DocumentProvenance {
+  id               String       @id @default(cuid())
+  caseId           String
+  documentType     DocumentType
+  originalFilename String
+
+  // Stage 0: Ingestion
+  ingestionHash    String                    // SHA-256 of original uploaded file
+  ingestionTime    DateTime     @default(now())
+
+  // Stage 1: OCR
+  rawOcrText       String?      @db.Text     // Exact Tesseract output (may be Hindi/Marathi)
+  rawOcrHash       String?                   // SHA-256 of rawOcrText
+  ocrLanguage      String?                   // "hin" | "mar" | "eng" | "tam" | "hin+eng"
+  ocrConfidence    Float?                    // Average Tesseract confidence 0-100
+  ocrStatus        OCRStatus    @default(PENDING)
+  ocrPageCount     Int?
+
+  // Stage 2: Translation
+  translatedText   String?      @db.Text     // IndicTrans2 English output
+  translatedHash   String?                   // SHA-256 of translatedText
+  sourceLanguage   String?                   // Detected source language code
+  translationModel String?                   // "ai4bharat/indictrans2-indic-en-dist-200M"
+  translationStatus TranslationStatus @default(PENDING)
+
+  // Stage 3: NER
+  extractedEntities Json?                    // spaCy NER output with character offsets
+  nerModel          String?                  // "en_core_web_trf"
+
+  // Stage 5: Relationship Extraction
+  relationshipSource String?                 // "GROQ_LLM" | "COOCCURRENCE" | "CDR_DIRECT" | "BANK_DIRECT"
+
+  // Court admissibility
+  admissibility    AdmissibilityStatus @default(PENDING)
+
+  // Pipeline metadata
+  pipelineVersion  String       @default("v2.1-ocr-splink")
+  processedAt      DateTime?
+
+  // Three-timestamp model
+  eventTime        DateTime?                 // When the crime/event actually happened
+  recordTime       DateTime?                 // When police wrote the record
+  // ingestionTime is already above
+
+  // Timeline quality
+  timelineState    TimelineState @default(RECORDED)
+
+  // Relations
+  case             Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  nodes            NetworkNode[]
+
+  @@index([caseId])
+  @@index([ingestionHash])
+}
+
+// ── ENTITY RESOLUTION LOG (NEW) ────────────────────────────
+// Tracks every Splink merge/split decision for audit
+
+model EntityResolutionLog {
+  id               String             @id @default(cuid())
+  caseId           String
+  sourceEntityName String                          // "Ravi K. Jadhav"
+  targetEntityName String                          // "R. Jadhav"
+  sourceNodeId     String?                         // Existing node ID if matched
+  matchWeight      Float                            // Fellegi-Sunter log-odds weight
+  matchProbability Float                            // 0.0 to 1.0
+  decision         ResolutionDecision
+  fieldScores      Json                             // {"first_name": 2.1, "phone": 3.5, ...}
+  blockingKey      String?                          // Which blocking rule matched
+  decidedBy        String                           // "SPLINK_AUTO" | "OFFICER_ID_123"
+  decidedAt        DateTime           @default(now())
+
+  case             Case               @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([sourceEntityName, targetEntityName])
+}
+
+// ── NETWORK NODE (MODIFIED) ────────────────────────────────
+
+model NetworkNode {
+  id             String      @id @default(cuid())
+  caseId         String
+  label          String                    // Display name
+  entityType     String                    // "PERSON" | "ORG" | "PHONE" | "VEHICLE" | "ACCOUNT" | "LOCATION"
+  canonicalName  String?                   // Resolved name after Splink dedup
+  aliases        Json?                     // ["Ravi Jadhav", "R. K. Jadhav", "रवि जाधव"]
+  sourceLanguage String?                   // Original script language
+  personRole     PersonRole  @default(UNKNOWN)
+  roleSource     String?                   // Which document established this role
+  attributes     Json?                     // Flexible metadata
+  provenanceId   String?                   // Link to DocumentProvenance
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  case           Case        @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  provenance     DocumentProvenance? @relation(fields: [provenanceId], references: [id])
+  sourceEdges    NetworkEdge[] @relation("SourceEdges")
+  targetEdges    NetworkEdge[] @relation("TargetEdges")
+
+  @@index([caseId])
+  @@index([entityType])
+  @@index([canonicalName])
+}
+
+// ── NETWORK EDGE (MODIFIED) ────────────────────────────────
+
+model NetworkEdge {
+  id           String       @id @default(cuid())
+  caseId       String
+  sourceId     String
+  targetId     String
+  relationType RelationType
+  inkType      EdgeInkType  @default(OBSERVED)    // NEW: Three-Ink classification
+  weight       Float        @default(1)
+  evidence     String       @default("") @db.Text
+  sourceDocId  String?                             // NEW: Link to DocumentProvenance
+  mechanism    String       @default("LLM")        // "LLM" | "COOCCURRENCE" | "CDR" | "BANK" | "GHOST_LINK"
+  isVerified   Boolean      @default(false)         // NEW: Human verification flag
+  createdAt    DateTime     @default(now())
+
+  source       NetworkNode  @relation("SourceEdges", fields: [sourceId], references: [id], onDelete: Cascade)
+  target       NetworkNode  @relation("TargetEdges", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([sourceId, targetId])
+}
+
+// ── EVIDENCE ITEM ──────────────────────────────────────────
+
+model EvidenceItem {
+  id          String   @id @default(cuid())
+  caseId      String
+  type        String
+  title       String
+  description String?  @db.Text
+  fileUrl     String?
+  hash        String?
+  uploadedBy  String
+  createdAt   DateTime @default(now())
+
+  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+// ── AUDIT LOG (ENHANCED) ───────────────────────────────────
 
 model AuditLog {
   id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  action     String
-  entityType String
-  entityId   String
-  ipAddress  String   @default("")
-  metadata   Json?
+  caseId     String?
+  userId     String?
+  action     String                    // "recordIngest" | "entityMerge" | "edgeInfer" | "analystOverride" | "dataExport" | "certificateGenerate" | "accessDenied"
+  details    Json?
+  ipAddress  String?
   timestamp  DateTime @default(now())
 
+  case       Case?    @relation(fields: [caseId], references: [id])
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@index([caseId])
   @@index([userId])
-  @@index([entityType, entityId])
+  @@index([action])
   @@index([timestamp])
-}
-
-// ---------------------------------------------------------------------------
-// Cases
-// ---------------------------------------------------------------------------
-model Case {
-  id                    String       @id @default(cuid())
-  caseNumber            String       @unique
-  title                 String
-  description           String       @default("")
-  status                CaseStatus   @default(OPEN)
-  priority              CasePriority @default(MEDIUM)
-  jurisdiction          String       @default("")
-  source                CaseSource   @default(MANUAL)
-  externalId            String       @default("")
-  syncedAt              DateTime?
-  assignedInvestigatorId String?
-  assignedInvestigator  User?        @relation("AssignedCases", fields: [assignedInvestigatorId], references: [id], onDelete: SetNull)
-  startDate             DateTime     @default(now())
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
-
-  suspects      Suspect[]     @relation("CaseSuspects")
-  entities      Entity[]
-  nodes         NetworkNode[]
-  edges         NetworkEdge[]
-  evidence      Evidence[]
-  transactions  Transaction[]
-  callRecords   CallRecord[]
-  alerts        Alert[]
-  modusOperandi ModusOperandi[]
-  dossiers      Dossier[]
-
-  @@index([assignedInvestigatorId])
-  @@index([status])
-  @@index([jurisdiction])
-  @@index([createdAt])
-}
-
-// ---------------------------------------------------------------------------
-// Suspects
-// ---------------------------------------------------------------------------
-model Suspect {
-  id              String    @id @default(cuid())
-  name            String
-  aliases         String[]
-  dob             DateTime?
-  gender          String    @default("")
-  address         String    @default("")
-  phoneNumbers    String[]
-  photoUrl        String    @default("")
-  criminalHistory String[]  @default([])
-  kingpinScore    Float     @default(0)
-  role            GraphRole @default(EXECUTOR)
-  cases           Case[]    @relation("CaseSuspects")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  @@index([name])
-  @@index([kingpinScore])
-}
-
-// ---------------------------------------------------------------------------
-// Entities (NLP extraction output)
-// ---------------------------------------------------------------------------
-model Entity {
-  id            String     @id @default(cuid())
-  caseId        String
-  case          Case       @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  type          EntityType
-  value         String
-  confidence    Float      @default(0.8)
-  extractedFrom String     @default("")
-  layer         String     @default("spacy") // spacy | regex | llm
-  createdAt     DateTime   @default(now())
-
-  nodes         NetworkNode[]
-
-  @@index([caseId])
-  @@index([type, value])
-  @@index([value])
-}
-
-// ---------------------------------------------------------------------------
-// Network graph
-// ---------------------------------------------------------------------------
-model NetworkNode {
-  id          String     @id @default(cuid())
-  caseId      String
-  case        Case       @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  entityId    String?
-  entity      Entity?    @relation(fields: [entityId], references: [id], onDelete: SetNull)
-  label       String
-  x           Float      @default(0)
-  y           Float      @default(0)
-  kingpinScore Float     @default(0)
-  role        GraphRole  @default(EXECUTOR)
-  centrality  Json?
-  createdAt   DateTime   @default(now())
-
-  outEdges    NetworkEdge[] @relation("EdgeSource")
-  inEdges     NetworkEdge[] @relation("EdgeTarget")
-
-  @@index([caseId])
-  @@index([role])
-}
-
-model NetworkEdge {
-  id          String       @id @default(cuid())
-  caseId      String
-  case        Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  sourceId    String
-  source      NetworkNode  @relation("EdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)
-  targetId    String
-  target      NetworkNode  @relation("EdgeTarget", fields: [targetId], references: [id], onDelete: Cascade)
-  relationType RelationType
-  weight      Float        @default(1)
-  evidence    String       @default("")
-  createdAt   DateTime     @default(now())
-
-  @@index([caseId])
-  @@index([sourceId])
-  @@index([targetId])
-}
-
-// ---------------------------------------------------------------------------
-// Evidence (chain of custody)
-// ---------------------------------------------------------------------------
-model Evidence {
-  id         String       @id @default(cuid())
-  caseId     String
-  case       Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  type       EvidenceType
-  fileName   String
-  s3Url      String       @default("")
-  sha256Hash String       @default("")
-  uploadedBy String
-  uploader   User         @relation("UploadedEvidence", fields: [uploadedBy], references: [id], onDelete: Restrict)
-  gpsLat     Float?
-  gpsLng     Float?
-  capturedAt DateTime?
-  uploadedAt DateTime     @default(now())
-
-  @@index([caseId])
-  @@index([sha256Hash])
-  @@index([uploadedBy])
-}
-
-// ---------------------------------------------------------------------------
-// Financial + call data
-// ---------------------------------------------------------------------------
-model Transaction {
-  id              String   @id @default(cuid())
-  caseId          String
-  case            Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  fromAccount     String
-  toAccount       String
-  amount          Float
-  timestamp       DateTime @default(now())
-  transactionType String   @default("NEFT")
-  riskScore       Float    @default(0)
-
-  @@index([caseId])
-  @@index([fromAccount])
-  @@index([toAccount])
-  @@index([timestamp])
-}
-
-model CallRecord {
-  id          String   @id @default(cuid())
-  caseId      String
-  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  fromNumber  String
-  toNumber    String
-  durationSec Int      @default(0)
-  callTime    DateTime @default(now())
-  cellTower   String   @default("")
-
-  @@index([caseId])
-  @@index([fromNumber])
-  @@index([toNumber])
-}
-
-// ---------------------------------------------------------------------------
-// Alerts (persisted + pushed via WebSocket)
-// ---------------------------------------------------------------------------
-model Alert {
-  id        String        @id @default(cuid())
-  caseId    String
-  case      Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  type      AlertType
-  severity  AlertSeverity @default(MEDIUM)
-  message   String
-  data      Json?
-  resolved  Boolean       @default(false)
-  createdAt DateTime      @default(now())
-
-  @@index([caseId])
-  @@index([resolved])
-  @@index([createdAt])
-}
-
-// ---------------------------------------------------------------------------
-// Modus operandi fingerprint
-// ---------------------------------------------------------------------------
-model ModusOperandi {
-  id             String @id @default(cuid())
-  caseId         String @unique
-  case           Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  fingerprint    Json
-  similarCaseIds String[] @default([])
-  createdAt      DateTime @default(now())
-
-  @@index([caseId])
-}
-
-// ---------------------------------------------------------------------------
-// Dossiers
-// ---------------------------------------------------------------------------
-model Dossier {
-  id          String   @id @default(cuid())
-  caseId      String
-  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  generatedBy String
-  generator   User     @relation(fields: [generatedBy], references: [id], onDelete: Restrict)
-  s3Url       String   @default("")
-  localPath   String   @default("")
-  sha256Hash  String   @default("")
-  pageCount   Int      @default(0)
-  generatedAt DateTime @default(now())
-
-  @@index([caseId])
-  @@index([generatedBy])
 }

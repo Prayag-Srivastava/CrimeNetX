@@ -1,119 +1,124 @@
-"""NLP endpoints — entity extraction from FIR text/PDF, CDR CSV, bank CSV."""
-from __future__ import annotations
-from app.services.crime_simulator import generate_execution_simulation
+# ============================================================
+# ADD THESE ENDPOINTS TO YOUR EXISTING routers/nlp.py
+# ============================================================
 
-import io
-from typing import Any
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from app.services.pipeline import ForensicPipeline
+from app.models.schemas import PipelineResponse, ProvenanceResponse, IntegrityCheckResponse
+from app.utils.text_storage import TextStorage
 
-import pandas as pd
-from fastapi import APIRouter, File, HTTPException, UploadFile
+router = APIRouter(prefix="/api/nlp", tags=["NLP Pipeline"])
 
-from app.models.schemas import (
-    CDRExtractionRequest,
-    EntityExtractionRequest,
-    EntityExtractionResponse,
-)
-from app.services.nlp_extractor import extract_entities, extract_from_bank, extract_from_cdr
-from app.utils.pdf_parser import parse_fir_pdf
+# Initialize pipeline (lazy — models load on first request)
+_pipeline = None
 
-router = APIRouter(prefix="/api/nlp", tags=["NLP"])
-
-
-@router.post("/extract-entities", response_model=EntityExtractionResponse)
-async def extract_entities_endpoint(req: EntityExtractionRequest):
-    """Extract entities from raw FIR narrative text (or PDF text)."""
-    if not req.text.strip():
-        raise HTTPException(400, "text must not be empty")
-    return extract_entities(req.text, req.source_name, req.case_id)
+def get_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = ForensicPipeline()
+    return _pipeline
 
 
-@router.post("/extract-from-pdf", response_model=EntityExtractionResponse)
-async def extract_from_pdf(file: UploadFile = File(...)):
-    """Upload an FIR PDF — parse text + forensics metadata, then extract entities."""
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are accepted")
+@router.post("/process-document", response_model=PipelineResponse)
+async def process_document(
+    file: UploadFile = File(...),
+    case_id: str = Form(...),
+    document_type: str = Form("FIR"),
+    force_language: str = Form(None),
+):
+    """
+    Process a document through the full 5-stage forensic pipeline.
+    OCR → Translation → NER → Entity Resolution → Relationships.
+    """
+    import tempfile
+    from pathlib import Path
+
+    pipeline = get_pipeline()
+
+    # Save uploaded file temporarily
+    suffix = Path(file.filename).suffix or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
     try:
-        text, metadata = parse_fir_pdf(io.BytesIO(await file.read()))
-    except Exception as exc:
-        raise HTTPException(422, f"PDF parsing failed: {exc}") from exc
-    if not text.strip():
-        raise HTTPException(422, "No extractable text found in PDF (scanned image PDFs need OCR)")
-    resp = extract_entities(text, file.filename or "fir.pdf", None)
-    resp.warnings.append(f"PDF metadata: {metadata}")
-    return resp
-
-
-@router.post("/extract-from-cdr", response_model=EntityExtractionResponse)
-async def extract_from_cdr_endpoint(file: UploadFile = File(...)):
-    """CDR CSV upload — columns: from_number,to_number,duration_sec,call_time,cell_tower,imei"""
-    content = await file.read()
-    try:
-        df = pd.read_csv(io.BytesIO(content))
-    except Exception as exc:
-        raise HTTPException(422, f"CSV parse failed: {exc}") from exc
-    required = {"from_number", "to_number"}
-    if not required.issubset(df.columns):
-        raise HTTPException(422, f"CSV must contain columns: {required}")
-
-    df = df.fillna("")
-    rows = df.to_dict("records")
-    import datetime as dt
-
-    normalized: list[dict[str, Any]] = []
-    for r in rows:
-        call_time = r.get("call_time") or ""
-        try:
-            ts = pd.to_datetime(call_time).to_pydatetime()
-        except Exception:
-            ts = dt.datetime.utcnow()
-        normalized.append(
-            {
-                "from_number": str(r.get("from_number", "")).strip(),
-                "to_number": str(r.get("to_number", "")).strip(),
-                "duration_sec": int(r.get("duration_sec", 0) or 0),
-                "call_time": ts,
-                "cell_tower": str(r.get("cell_tower", "")),
-                "imei": str(r.get("imei", "")),
-            }
+        result = pipeline.process_document(
+            file_path=tmp_path,
+            case_id=case_id,
+            document_type=document_type,
+            force_language=force_language,
         )
-    return extract_from_cdr(normalized)
 
-@router.post("/generate-simulation")
-async def generate_simulation_endpoint(payload: dict):
-    case_title = payload.get("title", "")
-    case_description = payload.get("description", "")
-    entities = payload.get("entities", [])
-    
-    result = generate_execution_simulation(case_title, case_description, entities)
-    return result
-
-@router.post("/extract-from-bank", response_model=EntityExtractionResponse)
-async def extract_from_bank_endpoint(file: UploadFile = File(...)):
-    """Bank statement CSV upload — columns: from_account,to_account,amount,timestamp,transaction_type"""
-    content = await file.read()
-    try:
-        df = pd.read_csv(io.BytesIO(content))
-    except Exception as exc:
-        raise HTTPException(422, f"CSV parse failed: {exc}") from exc
-    required = {"from_account", "to_account", "amount"}
-    if not required.issubset(df.columns):
-        raise HTTPException(422, f"CSV must contain columns: {required}")
-
-    import datetime as dt
-
-    txns = []
-    for r in df.fillna("").to_dict("records"):
-        try:
-            ts = pd.to_datetime(r.get("timestamp") or "").to_pydatetime()
-        except Exception:
-            ts = dt.datetime.utcnow()
-        txns.append(
-            {
-                "from_account": str(r.get("from_account", "")).strip(),
-                "to_account": str(r.get("to_account", "")).strip(),
-                "amount": float(r.get("amount", 0) or 0),
-                "timestamp": ts,
-                "transaction_type": str(r.get("transaction_type", "NEFT")),
-            }
+        return PipelineResponse(
+            document_id=result.document_id,
+            case_id=result.case_id,
+            success=result.success,
+            original_file_hash=result.original_file_hash,
+            ocr_text_hash=result.ocr_text_hash,
+            translated_text_hash=result.translated_text_hash,
+            pipeline_version=result.pipeline_version,
+            ocr_confidence=result.ocr_confidence,
+            source_language=result.source_language,
+            was_translated=result.was_translated,
+            entities=result.entities,
+            relationships=result.relationships,
+            entities_merged=result.resolution_report.merges if result.resolution_report else 0,
+            entities_flagged_for_review=result.resolution_report.reviews if result.resolution_report else 0,
+            processing_time_seconds=result.processing_time_seconds,
+            stage_errors=result.stage_errors,
         )
-    return extract_from_bank(txns)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.get("/provenance/{case_id}/{document_id}", response_model=ProvenanceResponse)
+async def get_provenance(case_id: str, document_id: str):
+    """
+    Get the full provenance chain for a processed document.
+    Used for court verification and §63 certificate generation.
+    """
+    storage = TextStorage()
+    raw = storage.get_raw_text(case_id, document_id)
+    translated = storage.get_translated_text(case_id, document_id)
+
+    import json
+    from pathlib import Path
+    prov_path = storage.base_dir / case_id / f"{document_id}_provenance.json"
+
+    if not prov_path.exists():
+        raise HTTPException(404, "Provenance record not found")
+
+    prov = json.loads(prov_path.read_text())
+
+    return ProvenanceResponse(
+        document_id=document_id,
+        case_id=case_id,
+        hash_chain=prov["hash_chain"],
+        ocr_language=prov["stages"]["ocr"]["language"],
+        ocr_confidence=prov["stages"]["ocr"]["confidence"],
+        translation_model=prov["stages"]["translation"]["model"],
+        source_language=prov["stages"]["translation"]["source_language"],
+        pipeline_version=prov["pipeline_version"],
+        ingested_at=prov["timestamps"]["ingested_at"],
+        raw_text_available=raw is not None,
+        translated_text_available=translated is not None,
+    )
+
+
+@router.get("/verify/{case_id}/{document_id}", response_model=IntegrityCheckResponse)
+async def verify_integrity(case_id: str, document_id: str):
+    """
+    Verify that a document has not been tampered with.
+    Checks SHA-256 hashes at every stage of the pipeline.
+    This is the API behind the "Catch-the-Tamper" demo.
+    """
+    storage = TextStorage()
+    result = storage.verify_integrity(case_id, document_id)
+
+    return IntegrityCheckResponse(
+        document_id=document_id,
+        is_valid=result["valid"],
+        checks=result.get("checks", []),
+        error=result.get("error"),
+    )
