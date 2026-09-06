@@ -107,6 +107,8 @@ class GraphEdge(BaseModel):
     relation: RelationType
     weight: float = 1.0
     evidence: str = ""
+    short_explanation: str = ""
+    elaboration: str = ""
     timestamps: list[datetime] = Field(default_factory=list)
 
 

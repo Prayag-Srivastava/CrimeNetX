@@ -257,17 +257,19 @@ model NetworkNode {
 }
 
 model NetworkEdge {
-  id          String       @id @default(cuid())
-  caseId      String
-  case        Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  sourceId    String
-  source      NetworkNode  @relation("EdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)
-  targetId    String
-  target      NetworkNode  @relation("EdgeTarget", fields: [targetId], references: [id], onDelete: Cascade)
-  relationType RelationType
-  weight      Float        @default(1)
-  evidence    String       @default("")
-  createdAt   DateTime     @default(now())
+  id               String       @id @default(cuid())
+  caseId           String
+  case             Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceId         String
+  source           NetworkNode  @relation("EdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  targetId         String
+  target           NetworkNode  @relation("EdgeTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  relationType     RelationType
+  weight           Float        @default(1)
+  evidence         String       @default("")
+  shortExplanation String       @default("")
+  elaboration      String       @default("")
+  createdAt        DateTime     @default(now())
 
   @@index([caseId])
   @@index([sourceId])

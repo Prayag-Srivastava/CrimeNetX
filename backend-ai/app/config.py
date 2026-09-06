@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./chroma_data"
     redis_url: str = "redis://localhost:6379"
     database_url: str = ""
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "crimenetx_neo4j_pass"
 
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
