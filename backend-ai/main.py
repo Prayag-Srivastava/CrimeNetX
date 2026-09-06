@@ -8,6 +8,7 @@ Serves the AI/ML/NLP microservice on port 8000:
   - Financial tracing & laundering risk
   - LangGraph agentic analysis over SSE
   - Dossier PDF generation
+  - Investigator chatbot (RAG over case data)
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger as loguru_logger
 
 from app.config import settings
-from app.routers import agentic, dossier, financial, graph_ml, nlp, vector, vision
+from app.routers import agentic, chat, dossier, financial, graph_ml, nlp, vector, vision
 
 
 @asynccontextmanager
@@ -48,7 +49,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Structured logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 # Routers
@@ -59,6 +59,7 @@ app.include_router(vector.router)
 app.include_router(financial.router)
 app.include_router(agentic.router)
 app.include_router(dossier.router)
+app.include_router(chat.router)
 
 
 @app.get("/", tags=["meta"])

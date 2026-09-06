@@ -5,17 +5,17 @@ import { useSession } from "next-auth/react";
 import { Sidebar } from "@/components/shared/Sidebar";
 import { Navbar } from "@/components/shared/Navbar";
 import { RoleGuard } from "@/components/shared/RoleGuard";
+import { InvestigatorChat } from "@/components/chat/InvestigatorChat";
 import { useSocket } from "@/hooks/useSocket";
 import { tokenStore } from "@/lib/api";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { status, data } = useSession();
   const router = useRouter();
-  useSocket(); // real-time alert toasts
+  useSocket();
 
   useEffect(() => {
     if (status === "authenticated") {
-      // Mirror NextAuth tokens into localStorage for the axios layer.
       const access = (data as { accessToken?: string } | null)?.accessToken;
       if (access) {
         tokenStore.set(access, tokenStore.getRefresh() ?? "");
@@ -43,6 +43,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <RoleGuard>{children}</RoleGuard>
         </main>
       </div>
+      <InvestigatorChat />
     </div>
   );
 }

@@ -166,3 +166,42 @@ export interface CrossReferenceMatch {
   matchedEntities: string[];
   matchedReason: string;
 }
+
+// ---------------------------------------------------------------------------
+// Chatbot
+// ---------------------------------------------------------------------------
+export type ChatMessageRole = "user" | "assistant" | "system";
+
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  role: ChatMessageRole;
+  content: string;
+  intent?: string;
+  createdAt: string;
+}
+
+export interface ChatConversation {
+  id: string;
+  userId: string;
+  caseId?: string | null;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages?: ChatMessage[];
+  _count?: { messages: number };
+}
+
+export type ChatStreamEventType =
+  | "conversation"
+  | "intent"
+  | "context"
+  | "token"
+  | "citation"
+  | "done"
+  | "error";
+
+export interface ChatStreamEvent {
+  type: ChatStreamEventType;
+  data: Record<string, any>;
+}

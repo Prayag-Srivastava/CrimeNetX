@@ -20,12 +20,12 @@ import alertRoutes from "./routes/alerts.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import proxyRoutes from "./routes/proxy.routes";
 import dossierRoutes from "./routes/dossier.routes";
+import chatRoutes from "./routes/chat.routes";
 import { initAlertSocket } from "./sockets/alertSocket";
 
 const app = express();
 const server = http.createServer(app);
 
-// --- Security & parsing ------------------------------------------------------
 app.use(helmet());
 app.use(
   cors({
@@ -37,31 +37,29 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(generalLimiter);
 
-// --- Request logging ---------------------------------------------------------
 app.use((req, _res, next) => {
   logger.info(`${req.method} ${req.originalUrl}`);
   next();
 });
 
-// --- Health ------------------------------------------------------------------
-app.get("/api/health", (_req, res) => res.json({ status: "healthy", service: "backend-node", time: new Date().toISOString() }));
+app.get("/api/health", (_req, res) =>
+  res.json({ status: "healthy", service: "backend-node", time: new Date().toISOString() })
+);
 
-// --- Routes ------------------------------------------------------------------
 app.use("/api/auth", authRoutes);
 app.use("/api/cases", caseRoutes);
 app.use("/api/suspects", suspectRoutes);
 app.use("/api/evidence", evidenceRoutes);
-app.use("/api", networkRoutes); // network routes mounted at /api/case/:id/network
+app.use("/api", networkRoutes);
 app.use("/api/alerts", alertRoutes);
 app.use("/api/analytics", analyticsRoutes);
-app.use("/api", proxyRoutes); // /api/ai/*
+app.use("/api", proxyRoutes);
 app.use("/api/dossier", dossierRoutes);
+app.use("/api/chat", chatRoutes);
 
-// --- Errors ------------------------------------------------------------------
 app.use(notFound);
 app.use(errorHandler);
 
-// --- Socket.io (real-time alerts) -------------------------------------------
 const io = new SocketServer(server, {
   cors: { origin: [env.frontendUrl, "http://localhost:3000", "http://127.0.0.1:3000"], credentials: true },
   path: "/socket.io",
@@ -73,7 +71,6 @@ server.listen(env.port, "0.0.0.0", () => {
   logger.info(`AI service URL: ${env.aiServiceUrl}`);
 });
 
-// Graceful shutdown
 process.on("SIGTERM", () => {
   logger.info("SIGTERM received — shutting down");
   unsubscribe();

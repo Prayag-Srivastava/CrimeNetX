@@ -25,7 +25,6 @@ MO_COLLECTION = "mo_fingerprints"
 
 @lru_cache
 def get_chroma_client():
-    # Local persistent mode: data survives restarts in CHROMA_PERSIST_DIR.
     return chromadb.PersistentClient(
         path=settings.chroma_persist_dir,
         settings=ChromaSettings(anonymized_telemetry=False),
@@ -39,7 +38,7 @@ def _collection(name: str):
     except Exception:
         return client.create_collection(
             name,
-            metadata={"hnsw:space": "cosine"},  # cosine for semantic similarity
+            metadata={"hnsw:space": "cosine"},
         )
 
 
@@ -62,11 +61,7 @@ def search_firs(
     exclude_case_id: str | None = None,
     n_results: int = 10,
 ) -> list[dict]:
-    """Semantic search over historical FIRs. Returns top-k with distances.
-
-    The case_id is stored as the Chroma document ID, not as metadata,
-    so exclusion is performed after the Chroma query.
-    """
+    """Semantic search over historical FIRs. Returns top-k with full document text."""
     coll = _collection(FIR_COLLECTION)
 
     total = coll.count()
@@ -74,8 +69,6 @@ def search_firs(
         return []
 
     try:
-        # Ask for one extra result because the current case may be among
-        # the nearest results and needs to be removed.
         fetch_count = min(n_results + 1, total)
 
         res = coll.query(
@@ -88,9 +81,9 @@ def search_firs(
         ids = (res.get("ids") or [[]])[0]
         dists = (res.get("distances") or [[]])[0]
         metas = (res.get("metadatas") or [[]])[0]
+        docs = (res.get("documents") or [[]])[0]
 
-        for cid, dist, meta in zip(ids, dists, metas):
-            # Chroma document ID is the case ID.
+        for cid, dist, meta, doc in zip(ids, dists, metas, docs):
             if exclude_case_id and cid == exclude_case_id:
                 continue
 
@@ -99,6 +92,7 @@ def search_firs(
                     "case_id": cid,
                     "distance": float(dist),
                     "metadata": meta or {},
+                    "document": str(doc or ""),
                 }
             )
 
@@ -107,7 +101,7 @@ def search_firs(
 
         return out
 
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         logger.warning("chroma query failed (%s)", exc)
         return []
 
@@ -125,10 +119,9 @@ def search_mo(query: str, exclude_case_id: str | None = None, n_results: int = 1
         metas = (res.get("metadatas") or [[]])[0]
         out = []
         for cid, dist, meta in zip(ids, dists, metas):
-            # cosine distance -> similarity percentage
             similarity = max(0.0, 1.0 - float(dist))
             out.append({"case_id": cid, "match_percentage": round(similarity * 100, 1), "metadata": meta or {}})
         return out
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         logger.warning("chroma MO query failed (%s)", exc)
         return []

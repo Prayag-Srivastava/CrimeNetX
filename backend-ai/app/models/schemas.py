@@ -271,3 +271,58 @@ class AgentEvent(BaseModel):
     message: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+# ---------------------------------------------------------------------------
+# Chatbot (Investigator Assistant)
+# ---------------------------------------------------------------------------
+class ChatIntent(str, Enum):
+    """Detected user intent for routing to the right retrieval strategy."""
+    FACTUAL_CASE = "factual_case"           # "who are the suspects in case X"
+    NETWORK_ANALYSIS = "network_analysis"   # "who is the kingpin"
+    FINANCIAL_TRAIL = "financial_trail"     # "trace the money flow"
+    CRIME_THEORY = "crime_theory"           # "how was this crime executed"
+    CROSS_CASE = "cross_case"               # "similar cases elsewhere"
+    INTERROGATION = "interrogation"         # "what should i ask the suspect"
+    GENERAL = "general"                     # fallback / greeting
+
+
+class ChatContextBundle(BaseModel):
+    """Pre-fetched case data sent by the Node backend along with the query."""
+    case_id: str | None = None
+    case_number: str = ""
+    case_title: str = ""
+    case_status: str = ""
+    case_priority: str = ""
+    jurisdiction: str = ""
+    description: str = ""
+    fir_texts: list[str] = Field(default_factory=list)
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    suspects: list[dict[str, Any]] = Field(default_factory=list)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    transactions: list[dict[str, Any]] = Field(default_factory=list)
+    call_records: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    alerts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatMessageIn(BaseModel):
+    role: Literal["user", "assistant", "system"] = "user"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Body sent from Node -> AI /api/chat/query."""
+    question: str = Field(min_length=1, max_length=2000)
+    case_id: str | None = None
+    history: list[ChatMessageIn] = Field(default_factory=list)
+    context: ChatContextBundle = Field(default_factory=ChatContextBundle)
+    user_role: str = "INVESTIGATOR"
+    user_name: str = "Officer"
+
+
+class ChatStreamEvent(BaseModel):
+    """SSE event emitted by /api/chat/query."""
+    type: Literal["intent", "context", "token", "citation", "done", "error"]
+    data: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)

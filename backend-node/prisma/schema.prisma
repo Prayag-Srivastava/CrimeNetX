@@ -118,6 +118,7 @@ model User {
   generatedDossiers Dossier[]
   auditLogs      AuditLog[]
   refreshTokens  RefreshToken[]
+  chatConversations ChatConversation[]
 
   @@index([role])
   @@index([email])
@@ -181,6 +182,7 @@ model Case {
   alerts        Alert[]
   modusOperandi ModusOperandi[]
   dossiers      Dossier[]
+  chatConversations ChatConversation[]
 
   @@index([assignedInvestigatorId])
   @@index([status])
@@ -382,4 +384,37 @@ model Dossier {
 
   @@index([caseId])
   @@index([generatedBy])
+}
+
+// ---------------------------------------------------------------------------
+// Chatbot conversations
+// ---------------------------------------------------------------------------
+model ChatConversation {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  caseId    String?
+  case      Case?         @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  title     String        @default("New conversation")
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  messages  ChatMessage[]
+
+  @@index([userId])
+  @@index([caseId])
+  @@index([updatedAt])
+}
+
+model ChatMessage {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String           // "user" | "assistant" | "system"
+  content        String
+  intent         String           @default("")
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId])
+  @@index([createdAt])
 }

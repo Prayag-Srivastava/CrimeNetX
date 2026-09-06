@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Type, TypeVar
+from typing import Any, AsyncGenerator, Type, TypeVar
 
 from groq import Groq
 from pydantic import BaseModel
@@ -46,6 +46,39 @@ def groq_chat(messages: list[dict[str, str]], model: str | None = None, temperat
     return resp.choices[0].message.content or ""
 
 
+async def groq_chat_stream(
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+) -> AsyncGenerator[str, None]:
+    """Streaming chat completion — yields token chunks as they arrive.
+
+    Used by the investigator chatbot for real-time typing effect.
+    If Groq is not configured, yields a single fallback message.
+    """
+    client = _client()
+    if client is None:
+        yield "⚠️ Chatbot unavailable — GROQ_API_KEY not configured on the AI service."
+        return
+
+    try:
+        stream = client.chat.completions.create(
+            model=model or settings.groq_model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                yield delta
+    except Exception as exc:
+        logger.error("groq_chat_stream failed: %s", exc)
+        yield f"\n\n⚠️ Streaming error: {str(exc)}"
+
+
 def groq_structured(prompt: str, schema: Type[T], model: str | None = None, temperature: float = 0.1) -> T | None:
     """Groq call returning JSON that validates against a Pydantic schema.
 
@@ -73,12 +106,11 @@ def groq_structured(prompt: str, schema: Type[T], model: str | None = None, temp
             response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content or "{}"
-        # Robust JSON extraction (strip stray markdown fences if present)
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
         return schema.model_validate(json.loads(raw))
-    except Exception as exc:  # validation errors, quota errors, network — degrade
+    except Exception as exc:
         logger.warning("groq_structured failed (%s) — returning None", exc)
         return None
 
