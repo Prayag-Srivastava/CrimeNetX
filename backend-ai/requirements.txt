@@ -15,13 +15,14 @@ langchain==0.3.13
 langchain-groq==0.2.1
 
 # NLP
-spacy==3.8.4
+spacy>=3.8.14
 # model: python -m spacy download en_core_web_sm
 
 # Graph ML / ML
 networkx==3.4.2
 scikit-learn==1.6.0
-numpy==1.26.4
+numpy>=1.26.4,<2.0.0; python_version < "3.12"
+numpy>=2.1.0; python_version >= "3.12"
 pandas==2.2.3
 scipy==1.14.1
 
