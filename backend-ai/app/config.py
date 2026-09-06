@@ -1,56 +1,109 @@
-"""CrimeNetX AI service — application configuration.
+# ============================================================
+# backend-ai/app/config.py
+# CrimeNetX Configuration (Pydantic v2 Compatible)
+# ============================================================
 
-All secrets come from environment variables. Missing keys degrade gracefully:
-LLM-dependent features return deterministic rule-based fallbacks so the
-platform remains demonstrable without paid API keys.
-"""
-from functools import lru_cache
-
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+from pathlib import Path
+from typing import ClassVar
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    # --- Service wiring ---
-    app_name: str = "CrimeNetX AI Service"
+    # App Settings
+    APP_NAME: str = "CrimeNetX AI Backend"
+    app_name: str = "CrimeNetX AI Backend"
     version: str = "1.0.0"
-    node_backend_url: str = "http://localhost:5000"
+    DEBUG: bool = True
     allowed_origins: list[str] = [
         "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+        "http://localhost:5000",
+]
 
-    # --- LLM: Groq is PRIMARY for all text/reasoning ---
-    groq_api_key: str = ""
-    groq_model: str = "groq/compound-mini"
+    # --- STAGE 1: OCR SETTINGS ---
+    DEFAULT_TESS_PATH: ClassVar[str] = (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if os.name == "nt"
+        else "/usr/bin/tesseract"
+    )
+    TESSERACT_CMD: str = os.getenv("TESSERACT_CMD", DEFAULT_TESS_PATH)
+    OCR_DEFAULT_LANG: str = "eng+hin"
+    TESSERACT_PSM: int = 6
+    TESSERACT_OEM: int = 3
+    OCR_MIN_CONFIDENCE: int = 40
+    PDF_DPI: int = 300
 
-    # --- Gemini used ONLY for multimodal vision (CCTV/photo matching) ---
-    gemini_api_key: str = ""
-    gemini_vision_model: str = "gemini-1.5-flash"
+    # --- STAGE 2: TRANSLATION SETTINGS ---
+    INDICTRANS_MODEL_SIZE: str = os.getenv("INDICTRANS_MODEL_SIZE", "200M")
+    INDICTRANS_MODEL_NAME: str = (
+        "ai4bharat/indictrans2-indic-en-dist-200M"
+        if INDICTRANS_MODEL_SIZE == "200M"
+        else "ai4bharat/indictrans2-indic-en-1B"
+    )
+    TRANSLATION_DEVICE: str = os.getenv("TRANSLATION_DEVICE", "auto")
+    TRANSLATION_MAX_LENGTH: int = 256
+    TRANSLATION_BATCH_SIZE: int = 8
 
-    # --- Storage ---
-    chroma_persist_dir: str = "./chroma_data"
-    redis_url: str = "redis://localhost:6379"
-    database_url: str = ""
+    # --- STAGE 3: NER SETTINGS ---
+    SPACY_MODEL: str = os.getenv("SPACY_MODEL", "en_core_web_sm")
 
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-    aws_region: str = "ap-south-1"
-    aws_s3_bucket: str = "crimenetx-evidence"
+    # --- STAGE 4: ENTITY RESOLUTION (SPLINK) ---
+    SPLINK_MATCH_THRESHOLD: float = 0.95
+    SPLINK_REVIEW_THRESHOLD: float = 0.30
 
+    # --- STAGE 5: GROQ / RELATIONSHIPS ---
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+        # --- AI PROVIDER STATUS ---
     @property
     def groq_enabled(self) -> bool:
-        return bool(self.groq_api_key)
+        return bool(self.GROQ_API_KEY)
 
     @property
     def gemini_enabled(self) -> bool:
-        return bool(self.gemini_api_key)
+        return bool(os.getenv("GEMINI_API_KEY", ""))
+
+    # --- PROVENANCE & STORAGE ---
+    RAW_TEXT_STORAGE_DIR: Path = Path(os.getenv("RAW_TEXT_DIR", "data/raw_texts"))
+    PIPELINE_VERSION: str = "v2.1-ocr-indictrans-splink"
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+settings = Settings()
 
+# Export module-level variables for clean imports
+PIPELINE_VERSION = settings.PIPELINE_VERSION
+RAW_TEXT_STORAGE_DIR = settings.RAW_TEXT_STORAGE_DIR
+TESSERACT_CMD = settings.TESSERACT_CMD
+OCR_DEFAULT_LANG = settings.OCR_DEFAULT_LANG
+TESSERACT_PSM = settings.TESSERACT_PSM
+TESSERACT_OEM = settings.TESSERACT_OEM
+OCR_MIN_CONFIDENCE = settings.OCR_MIN_CONFIDENCE
+PDF_DPI = settings.PDF_DPI
+INDICTRANS_MODEL_NAME = settings.INDICTRANS_MODEL_NAME
+TRANSLATION_DEVICE = settings.TRANSLATION_DEVICE
+TRANSLATION_MAX_LENGTH = settings.TRANSLATION_MAX_LENGTH
+TRANSLATION_BATCH_SIZE = settings.TRANSLATION_BATCH_SIZE
+SPACY_MODEL = settings.SPACY_MODEL
+SPLINK_MATCH_THRESHOLD = settings.SPLINK_MATCH_THRESHOLD
+SPLINK_REVIEW_THRESHOLD = settings.SPLINK_REVIEW_THRESHOLD
+GROQ_API_KEY = settings.GROQ_API_KEY
+GROQ_MODEL = settings.GROQ_MODEL
 
-settings = get_settings()
+OCR_LANGUAGES = {
+    "hindi": "hin",
+    "marathi": "mar",
+    "tamil": "tam",
+    "telugu": "tel",
+    "bengali": "ben",
+    "gujarati": "guj",
+    "kannada": "kan",
+    "malayalam": "mal",
+    "punjabi": "pan",
+    "urdu": "urd",
+    "english": "eng",
+}

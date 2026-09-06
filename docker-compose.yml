@@ -72,7 +72,7 @@ services:
     env_file:
       - ./backend-node/.env
     environment:
-      DATABASE_URL: postgresql://crimenetx:crimenetx@postgres:5432/crimenetx?schema=public
+      DATABASE_URL: postgresql://neondb_owner:npg_W3VaxoY5rbNg@ep-plain-poetry-azioxp85-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
       REDIS_URL: redis://redis:6379
       AI_SERVICE_URL: http://backend-ai:8000
     depends_on:
@@ -89,6 +89,8 @@ services:
     build:
       context: ./backend-ai
       dockerfile: Dockerfile
+      secrets:
+        - hf_token
     container_name: crimenetx-backend-ai
     restart: unless-stopped
     ports:
@@ -96,7 +98,7 @@ services:
     env_file:
       - ./backend-ai/.env
     environment:
-      DATABASE_URL: postgresql://crimenetx:crimenetx@postgres:5432/crimenetx?schema=public
+      DATABASE_URL: postgresql://neondb_owner:npg_W3VaxoY5rbNg@ep-plain-poetry-azioxp85-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
       REDIS_URL: redis://redis:6379
       NODE_BACKEND_URL: http://backend-node:5000
       CHROMA_PERSIST_DIR: /data/chroma
@@ -108,6 +110,7 @@ services:
     volumes:
       - chroma_data:/data/chroma
       - evidence_uploads:/app/evidence
+    
 
   # ---------------------------------------------------------------- frontend
   frontend:
@@ -129,3 +132,7 @@ volumes:
   redis_data:
   chroma_data:
   evidence_uploads:
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

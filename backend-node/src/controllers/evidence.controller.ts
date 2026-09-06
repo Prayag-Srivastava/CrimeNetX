@@ -427,6 +427,7 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
             id: entity.id,
             caseId,
             entityId: entity.id,
+            entityType: entity.type,
             label: value,
             kingpinScore: 0,
             role: "EXECUTOR",
@@ -628,6 +629,7 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
             id: entity.id,
             caseId,
             entityId: entity.id,
+            entityType: entity.type,
             label: value,
             kingpinScore: 0,
             role: "EXECUTOR",
@@ -925,6 +927,7 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
             id: entity.id,
             caseId,
             entityId: entity.id,
+            entityType: entity.type,
             label: node.label,
             kingpinScore: node.kingpin_score,
             role:
