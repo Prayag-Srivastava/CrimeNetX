@@ -88,6 +88,8 @@ services:
   backend-ai:
     build:
       context: ./backend-ai
+      args:
+        HF_TOKEN: ${HF_TOKEN}
       dockerfile: Dockerfile
       secrets:
         - hf_token

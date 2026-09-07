@@ -127,7 +127,7 @@ export function FIRUploader({ caseId, onUploaded }: { caseId: string; onUploaded
           ocr_confidence: number;
           source_language: string;
           was_translated: boolean;
-        }>("/nlp/process-document", formData);
+        }>("api/nlp/process-document", formData);
 
         // Map the new spaCy entities to the format your React UI expects
         const mappedEntities = (nlpResult.entities ?? []).map(ent => ({

@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # --- STAGE 5: GROQ / RELATIONSHIPS ---
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
 
         # --- AI PROVIDER STATUS ---
     @property

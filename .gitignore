@@ -42,3 +42,4 @@ backend-ai/chroma_data/
 
 # --- Generated dossier artifacts ---
 backend-ai/app/generated_dossiers/
+hf_token.txt
