@@ -78,6 +78,8 @@ enum EvidenceType {
   PHOTO
   DOCUMENT
   CCTV
+  GEOMETRY_DOCUMENT
+  CRIME_SCENE_ANALYSIS
 }
 
 enum AlertType {
@@ -113,6 +115,9 @@ enum DocumentType {
   SURVEILLANCE_NOTE
   OSINT_CAPTURE
   COMPLAINT
+  EVIDENCE_REPORT
+  GEOMETRY_DOCUMENT
+  CRIME_SCENE_ANALYSIS
 }
 
 enum OCRStatus {
@@ -163,6 +168,14 @@ enum ScenePlacementStatus {
   INFERRED
   MANUAL
   UNPLACED
+}
+
+enum PlacementSource {
+  INVESTIGATOR
+  DOCUMENT
+  GPS
+  AI_INFERRED
+  UNKNOWN
 }
 
 // ============================================================================
@@ -250,22 +263,25 @@ model Case {
 
   assignedInvestigator User? @relation("AssignedCases", fields: [assignedInvestigatorId], references: [id])
 
-  suspects               Suspect[]                @relation("CaseSuspects")
-  entities               Entity[]
-  nodes                  NetworkNode[]
-  edges                  NetworkEdge[]
-  evidence               Evidence[]
-  evidenceItems          EvidenceItem[]
-  transactions           Transaction[]
-  callRecords            CallRecord[]
-  alerts                 Alert[]
-  modusOperandi          ModusOperandi?
-  dossiers               Dossier[]
-  documents              DocumentProvenance[]
-  resolutionLogs         EntityResolutionLog[]
-  chatConversations      ChatConversation[]
-  AuditLog               AuditLog[]
-  SceneEvidencePlacement SceneEvidencePlacement[]
+  suspects                 Suspect[]                @relation("CaseSuspects")
+  entities                 Entity[]
+  nodes                    NetworkNode[]
+  edges                    NetworkEdge[]
+  evidence                 Evidence[]
+  evidenceItems            EvidenceItem[]
+  transactions             Transaction[]
+  callRecords              CallRecord[]
+  alerts                   Alert[]
+  modusOperandi            ModusOperandi?
+  dossiers                 Dossier[]
+  documents                DocumentProvenance[]
+  resolutionLogs           EntityResolutionLog[]
+  chatConversations        ChatConversation[]
+  AuditLog                 AuditLog[]
+  reconstructionPlacements SceneEvidencePlacement[]
+  geometryDocuments        SceneGeometryDocument[]
+  hierarchicalPlacements   HierarchicalPlacement[]
+  sceneConflicts           SceneConflict[]
 
   @@index([assignedInvestigatorId])
   @@index([status])
@@ -486,11 +502,15 @@ model Evidence {
   capturedAt DateTime?
   uploadedAt DateTime     @default(now())
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  /// Investigator-authored description of what a photographic evidence item depicts.
+  /// This is the primary human observation sent to the reconstruction context builder.
+  investigatorDescription String? @db.Text
+  case                    Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   uploader User @relation("UploadedEvidence", fields: [uploadedBy], references: [id])
 
-  SceneEvidencePlacement SceneEvidencePlacement?
+  reconstructionPlacement SceneEvidencePlacement?
+  hierarchicalPlacement   HierarchicalPlacement?
 
   @@index([caseId])
   @@index([sha256Hash])
@@ -656,7 +676,7 @@ model ChatMessage {
 // ============================================================================
 
 model SceneEvidencePlacement {
-  id         String               @id
+  id         String               @id @default(cuid())
   caseId     String
   evidenceId String               @unique
   x          Float
@@ -671,13 +691,73 @@ model SceneEvidencePlacement {
   confidence Float?
   placedById String?
   placedAt   DateTime             @default(now())
-  updatedAt  DateTime
+  updatedAt  DateTime             @updatedAt
 
-  Case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case     Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  placedBy User?    @relation(fields: [placedById], references: [id])
 
-  Evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  @@index([caseId])
+  @@index([status])
+}
 
-  User User? @relation(fields: [placedById], references: [id])
+model SceneGeometryDocument {
+  id               String   @id @default(cuid())
+  caseId           String
+  originalFilename String
+  s3Url            String   @default("")
+  sha256Hash       String   @default("")
+  pageCount        Int      @default(1)
+  rawText          String?  @db.Text
+  geometryContext  Json
+  uploadedAt       DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+model HierarchicalPlacement {
+  id                String          @id @default(cuid())
+  caseId            String
+  evidenceId        String          @unique
+  floorId           String?
+  roomId            String?
+  areaId            String?
+  referenceEntityId String?
+  viewDirection     String?
+  description       String?         @db.Text
+  source            PlacementSource @default(INVESTIGATOR)
+  confidence        Float           @default(1.0)
+
+  x        Float?
+  y        Float?
+  z        Float?
+  rotation Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case     Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([roomId])
+}
+
+model SceneConflict {
+  id        String   @id @default(cuid())
+  caseId    String
+  sourceA   String
+  sourceB   String
+  entityId  String?
+  claimA    String
+  claimB    String
+  severity  String   @default("MEDIUM")
+  status    String   @default("REQUIRES_REVIEW")
+  createdAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
   @@index([status])
