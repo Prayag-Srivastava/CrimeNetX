@@ -1,839 +1,1863 @@
 """
-CrimeNetX — NLP Extractor (Pipeline v2.2 — Translation-Safe, 22 languages)
-===========================================================================
-WHAT CHANGED IN v2.2 (and WHY)
-------------------------------
-BUG: The frontend workflow reaches NER through the *agents*
-     (entity_agent.py / supervisor_agent.py) which call the module-level
-     extract_entities(). That path fed RAW Devanagari OCR text straight
-     into spaCy's English model -> Hindi/garbage entities, and Groq also
-     received Hindi text so relationships were poor.
+CrimeNetX — NLP Extractor
+=========================
 
-     Only the standalone ForensicPipeline test path translated first,
-     which is exactly why "it works in tests but not in the frontend".
+STAGE 3 of the forensic pipeline.
 
-FIX: NER is now TRANSLATION-SAFE at the source. `ensure_english()`
-     detects the script and runs IndicTrans2 internally if the text is
-     not Latin. Both entry paths (pipeline AND agents) now get English.
+Entity Extraction:
+    Primary: GLiNER (zero-shot NER with crime-domain labels)
+    Fallback: spaCy
+    Always: Regex for deterministic PII
 
-     - ForensicPipeline (already translated) -> ensure_english() is a
-       no-op passthrough, zero double-translation cost.
-     - Agents (raw Hindi) -> ensure_english() translates, then spaCy runs.
+Relationship Extraction:
+    Primary: Groq LLM
+    Fallback: GLiNER/spaCy co-occurrence
 
-OTHER IMPROVEMENTS
-------------------
-  * Devanagari leakage guard: any entity still containing Indic script
-    is dropped instead of surfacing in the UI.
-  * Entity quality: noise filtering, title stripping ("Shri", "Smt"),
-    PERSON name validation, dedup is now case/whitespace aware.
-  * Regex hardening: PINCODE no longer eats phone fragments, IMEI vs
-    bank-account disambiguation, LAW_SECTION handles "BNS 111" without
-    the word "Section".
-  * Groq: retries once, logs the real failure, no longer silently
-    returns [] when GROQ_API_KEY is missing at import time.
-  * extract_relationships() now maps LLM names back onto known entities
-    so the graph nodes actually match the entity list.
-
-BACKWARD COMPATIBLE: every public method name/signature is unchanged.
+Structured Data:
+    CDR extraction
+    Bank transaction extraction
 """
 
 import json
 import logging
 import re
-import unicodedata
-from typing import Optional
+from typing import Literal, Optional
 
-import spacy
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.models.schemas import Entity, EntityExtractionResponse, EntityType
-from app.config import SPACY_MODEL, GROQ_API_KEY
+from app.config import (
+    GROQ_API_KEY,
+    GLINER_MODEL,
+    GLINER_THRESHOLD,
+    USE_GLINER,
+    SPACY_MODEL,
+)
+
 
 logger = logging.getLogger(__name__)
 
 
-# ================================================================
-# Groq model selection
-# ================================================================
-# `llama-3.3-70b-versatile` was DEPRECATED on 2026-06-17 and shut down on
-# 2026-08-16 — it now returns 404 model_not_found for non-Enterprise keys.
-# Groq's recommended replacement is openai/gpt-oss-120b.
-#
-# We try a chain so a future deprecation degrades instead of breaking:
-# override with the GROQ_MODEL env var if you want to pin one.
-_GROQ_MODEL_CHAIN = [
-    "openai/gpt-oss-120b",    # recommended replacement, 500 tps, JSON mode
-    "openai/gpt-oss-20b",     # faster/cheaper fallback, 1000 tps
-    "qwen/qwen3.6-27b",       # alternate replacement
-    "groq/compound-mini",     # last resort
+# ============================================================
+# CRIME-DOMAIN ENTITY LABELS FOR GLiNER
+# ============================================================
+
+CRIME_ENTITY_LABELS = [
+    "person",
+    "police officer",
+    "victim",
+    "witness",
+    "suspect",
+    "location",
+    "city",
+    "police station",
+    "address",
+    "organization",
+    "gang name",
+    "phone number",
+    "vehicle registration number",
+    "bank account number",
+    "aadhaar number",
+    "pan card number",
+    "weapon",
+    "drug",
+    "stolen item",
+    "date",
+    "time",
+    "money amount",
+    "law section",
+    "court name",
+    "case number",
+    "email",
 ]
 
-# Remembers the first model that worked so we don't re-probe every call
-_WORKING_GROQ_MODEL: Optional[str] = None
 
+# ============================================================
+# GLiNER LABEL → DATABASE ENTITY TYPE
+# ============================================================
 
-def _groq_model_candidates() -> list[str]:
-    import os
-    pinned = os.getenv("GROQ_MODEL", "").strip()
-    if pinned:
-        return [pinned] + [m for m in _GROQ_MODEL_CHAIN if m != pinned]
-    return list(_GROQ_MODEL_CHAIN)
+GLINER_LABEL_TO_DB = {
+    "person": "PERSON",
+    "police officer": "PERSON",
+    "victim": "PERSON",
+    "witness": "PERSON",
+    "suspect": "PERSON",
 
+    "location": "LOCATION",
+    "city": "LOCATION",
+    "police station": "LOCATION",
+    "address": "LOCATION",
 
-# ================================================================
-# Script helpers — the core of the Hindi-entities fix
-# ================================================================
+    "organization": "ORGANIZATION",
+    "gang name": "ORGANIZATION",
 
-# Every non-Latin script IndicTrans2 can translate from. Imported from the
-# detector so there is ONE list — v2.1 hardcoded a short list here that was
-# missing Ol Chiki (Santali), Meetei Mayek (Manipuri) and Thaana, so text in
-# those scripts was wrongly treated as "already English" and never translated.
-try:
-    from app.services.language_detector import INDIC_SCRIPTS as _INDIC_SCRIPTS
-except Exception:  # pragma: no cover - detector import must never break NER
-    _INDIC_SCRIPTS = {
-        "DEVANAGARI", "BENGALI", "GUJARATI", "GURMUKHI", "KANNADA",
-        "MALAYALAM", "ORIYA", "ODIA", "TAMIL", "TELUGU", "ARABIC",
-        "OL", "MEETEI", "THAANA", "SINHALA",
-    }
+    "phone number": "PHONE",
+    "vehicle registration number": "VEHICLE",
+    "bank account number": "BANK_ACCOUNT",
 
+    "aadhaar number": "PERSON",
+    "pan card number": "PERSON",
 
-def _script_of(ch: str) -> str:
-    try:
-        name = unicodedata.name(ch, "")
-    except ValueError:
-        return "UNKNOWN"
-    return name.split()[0] if name else "UNKNOWN"
+    "weapon": "WEAPON",
+    "drug": "DRUG",
+    "stolen item": "STOLEN_ITEM",
 
+    "date": "DATE",
+    "time": "DATE",
+    "money amount": "MONEY",
 
-def indic_ratio(text: str) -> float:
-    """Fraction of alphabetic characters that are non-Latin Indic script."""
-    if not text:
-        return 0.0
-    letters = [c for c in text if c.isalpha()]
-    if not letters:
-        return 0.0
-    indic = sum(1 for c in letters if _script_of(c) in _INDIC_SCRIPTS)
-    return indic / len(letters)
+    "law section": "ORGANIZATION",
+    "court name": "ORGANIZATION",
+    "case number": "ORGANIZATION",
 
-
-def is_probably_english(text: str, threshold: float = 0.10) -> bool:
-    """True if the text is dominantly Latin script."""
-    return indic_ratio(text) < threshold
-
-
-def contains_indic(text: str) -> bool:
-    return any(_script_of(c) in _INDIC_SCRIPTS for c in text if c.isalpha())
-
-
-# ---- Pydantic schemas for Groq (unchanged contract) ----
-class LlmRelation(BaseModel):
-    source: str
-    target: str
-    relation: str   # family | associate | same_organization | phone_call | financial_transfer
-    evidence: str
-
-
-class LlmExtraction(BaseModel):
-    relations: list[LlmRelation]
-
-
-# ================================================================
-# Noise filters for entity quality
-# ================================================================
-
-_TITLE_PREFIXES = (
-    "shri", "shree", "smt", "sri", "mr", "mrs", "ms", "dr", "shri.",
-    "accused", "complainant", "witness", "informant", "the", "one",
-    "si", "psi", "asi", "pi", "acp", "dcp", "sp", "dsp", "constable",
-)
-
-_PERSON_STOPWORDS = {
-    "police", "station", "court", "fir", "ipc", "bns", "crpc", "bnss",
-    "section", "act", "state", "india", "government", "district",
-    "complaint", "accused", "unknown", "sir", "madam", "officer",
+    "email": "EMAIL",
 }
 
 
-def _clean_person_name(raw: str) -> str:
-    """Strip honorifics/role words, normalize whitespace."""
-    txt = re.sub(r"\s+", " ", raw or "").strip(" .,:;-\"'()")
-    if not txt:
-        return ""
-    tokens = txt.split()
-    while tokens and tokens[0].lower().strip(".") in _TITLE_PREFIXES:
-        tokens.pop(0)
-    return " ".join(tokens).strip(" .,:;-")
+# ============================================================
+# RELATIONSHIP TYPES
+# ============================================================
+
+RELATION_TYPES = (
+    "family",
+    "associate",
+    "same_organization",
+    "phone_call",
+    "financial_transfer",
+)
 
 
-def _is_valid_person(name: str) -> bool:
-    if not name or len(name) < 3 or len(name) > 60:
-        return False
-    if contains_indic(name):          # Devanagari leakage guard
-        return False
-    if any(ch.isdigit() for ch in name):
-        return False
-    low = name.lower()
-    if low in _PERSON_STOPWORDS:
-        return False
-    tokens = [t for t in name.split() if t]
-    if not tokens or len(tokens) > 5:
-        return False
-    if all(t.lower() in _PERSON_STOPWORDS for t in tokens):
-        return False
-    # must contain at least one capitalised alphabetic token
-    return any(t[0].isupper() and t.isalpha() for t in tokens)
+# ============================================================
+# PYDANTIC SCHEMAS FOR GROQ
+# ============================================================
 
+class LlmRelation(BaseModel):
+    """
+    Minimal schema returned by Groq.
+
+    Evidence is intentionally NOT generated by the LLM.
+    We recover evidence from the original FIR text in Python.
+    This reduces output size and makes JSON generation more reliable.
+    """
+
+    source: str = Field(min_length=1)
+    target: str = Field(min_length=1)
+    relation: Literal[
+        "family",
+        "associate",
+        "same_organization",
+        "phone_call",
+        "financial_transfer",
+    ]
+
+
+class LlmExtraction(BaseModel):
+    relations: list[LlmRelation] = Field(default_factory=list)
+
+
+# ============================================================
+# NLP EXTRACTOR
+# ============================================================
 
 class NLPExtractor:
     """
-    NLP Extractor with translation-safe spaCy NER + Groq relationships.
+    NER Extractor:
 
-    Pipeline calls:
-        nlp.extract_entities_with_spans(text)          -> spaCy (auto-translates)
-        nlp.extract_relationships(text, entities)      -> Groq (auto-translates)
+        GLiNER
+           ↓
+        spaCy fallback
+           ↓
+        Regex always
 
-    Legacy/agent calls:
-        extract_entities(text)                         -> module-level wrapper
-        nlp.extract_from_cdr(csv_path)                 -> direct parsing
-        nlp.extract_from_bank(csv_path)                -> direct parsing
+    Relationship Extractor:
+
+        Groq
+           ↓
+        co-occurrence fallback
     """
 
     def __init__(self):
-        try:
-            self.nlp = spacy.load(SPACY_MODEL)
-            logger.info(f"spaCy model loaded: {SPACY_MODEL}")
-        except OSError:
-            logger.warning(f"{SPACY_MODEL} not found, falling back to en_core_web_sm")
-            try:
-                self.nlp = spacy.load("en_core_web_sm")
-            except OSError:
-                logger.error("No spaCy model found. Run: python -m spacy download en_core_web_sm")
-                self.nlp = None
+        self._gliner_model = None
+        self._spacy_nlp = None
+        self._extraction_engine = "none"
 
-        # Lazily-created translation helpers (heavy models — do NOT load eagerly)
-        self._translator = None
-        self._detector = None
+        # ----------------------------------------------------
+        # Regex patterns for deterministic Indian PII
+        # ----------------------------------------------------
 
-        # Custom regex patterns for Indian entities
         self._phone_pattern = re.compile(
-            r'(?<!\d)(?:\+91[\s\-]?|0)?(?:\d{5}[\s\-]\d{5}|[6-9]\d{9})(?!\d)'
+            r"(?:(?:\+91|0)?[\s\-]?)?"
+            r"(?:\d{5}[\s\-]?\d{5}|\d{10})"
         )
-        self._imei_pattern = re.compile(r'(?<!\d)\d{15}(?!\d)')
+
+        self._imei_pattern = re.compile(
+            r"\b\d{15}\b"
+        )
+
         self._vehicle_pattern = re.compile(
-            r'\b[A-Z]{2}[\s\-]?\d{1,2}[\s\-]?[A-Z]{1,3}[\s\-]?\d{4}\b'
-        )
-        self._law_pattern = re.compile(
-            r'\b(?:BNS|BNSS|IPC|CrPC|IT\s?Act|NDPS|POCSO)\s*'
-            r'(?:§|Sections?|Sec\.?)?\s*\d{1,4}(?:\s*\(\d+\))?[A-Z]?\b',
+            r"\b[A-Z]{2}\s?\d{1,2}\s?[A-Z]{1,3}\s?\d{1,4}\b",
             re.IGNORECASE,
         )
+
+        self._law_pattern = re.compile(
+            r"(?:BNS|IPC|CrPC|BNSS|IT Act|NDPS|POCSO)"
+            r"\s*(?:§|Section|Sec\.?)\s*\d+[A-Z]?",
+            re.IGNORECASE,
+        )
+
         self._pincode_pattern = re.compile(
-            r'(?<!\d)(?:PIN|Pin|pincode|Pincode|PIN\s?Code)[\s:\-]*([1-9]\d{5})(?!\d)'
-        )
-        self._bank_account_pattern = re.compile(
-            r'(?:A/?c|Account|Acct)[\s.:No#\-]*(\d{9,18})(?!\d)', re.IGNORECASE
-        )
-        self._crypto_pattern = re.compile(
-            r'\b(?:bc1[a-z0-9]{25,62}|0x[a-fA-F0-9]{40}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b'
+            r"\b[1-9]\d{5}\b"
         )
 
-    # ================================================================
-    # NEW: translation guard — the actual fix
-    # ================================================================
-    def _get_translator(self):
-        if self._translator is None:
-            from app.services.translator import TranslatorService
-            self._translator = TranslatorService()
-        return self._translator
+        self._aadhaar_pattern = re.compile(
+            r"\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b"
+        )
 
-    def _get_detector(self):
-        if self._detector is None:
-            from app.services.language_detector import LanguageDetector
-            self._detector = LanguageDetector()
-        return self._detector
+        self._ifsc_pattern = re.compile(
+            r"\b[A-Z]{4}0[A-Z0-9]{6}\b"
+        )
 
-    def ensure_english(self, text: str) -> str:
+        self._pan_pattern = re.compile(
+            r"\b[A-Z]{5}\d{4}[A-Z]\b"
+        )
+
+        self._upi_pattern = re.compile(
+            r"\b[a-zA-Z0-9.\-_]{2,256}"
+            r"@[a-zA-Z]{2,64}\b"
+        )
+
+        self._load_engines()
+
+    # ========================================================
+    # ENGINE LOADING
+    # ========================================================
+
+    def _load_engines(self):
         """
-        Guarantee spaCy/Groq receive English.
-
-        No-op when text is already Latin script (the ForensicPipeline case,
-        since Stage 2 already translated). Runs IndicTrans2 when the caller
-        handed us raw Devanagari (the agent / frontend case).
+        Try GLiNER first.
+        Fall back to spaCy if GLiNER fails.
         """
-        if not text or not text.strip():
-            return text or ""
 
-        if is_probably_english(text):
-            return text
+        # ----------------------------------------------------
+        # GLiNER
+        # ----------------------------------------------------
 
-        ratio = round(indic_ratio(text), 2)
-        logger.warning(
-            f"ensure_english(): non-Latin text reached NER "
-            f"(indic_ratio={ratio}). Translating inline before spaCy. "
-            f"Caller should ideally translate upstream."
-        )
-        # NOTE: language is auto-detected across all 22 IndicTrans2 languages —
-        # nothing here assumes Hindi.
+        if USE_GLINER:
+            try:
+                from gliner import GLiNER
+
+                logger.info(
+                    f"Loading GLiNER model: {GLINER_MODEL}"
+                )
+
+                self._gliner_model = GLiNER.from_pretrained(
+                    GLINER_MODEL
+                )
+
+                self._extraction_engine = "gliner"
+
+                logger.info(
+                    "GLiNER loaded — using zero-shot crime-domain NER"
+                )
+
+                return
+
+            except Exception as e:
+                logger.warning(
+                    f"GLiNER load failed: {e}. "
+                    "Falling back to spaCy."
+                )
+
+        # ----------------------------------------------------
+        # spaCy fallback
+        # ----------------------------------------------------
 
         try:
-            detection = self._get_detector().detect(text)
+            import spacy
 
-            if detection.is_english:
-                logger.info(
-                    "ensure_english(): detector says English despite non-Latin "
-                    "characters — likely OCR noise. Skipping translation."
+            try:
+                self._spacy_nlp = spacy.load(SPACY_MODEL)
+
+            except OSError:
+                logger.warning(
+                    f"{SPACY_MODEL} not found. "
+                    "Trying en_core_web_sm."
                 )
-                return text
+
+                self._spacy_nlp = spacy.load(
+                    "en_core_web_sm"
+                )
+
+            self._extraction_engine = "spacy"
 
             logger.info(
-                f"ensure_english(): detected {detection.language} "
-                f"({detection.indictrans_code}, script={detection.script}, "
-                f"method={detection.method})"
+                f"spaCy loaded: {SPACY_MODEL}"
             )
 
-            translation = self._get_translator().translate(
-                text,
-                source_lang=detection.language,
-                source_indictrans_code=detection.indictrans_code,
-            )
-            translated = getattr(translation, "translated_text", "") or ""
-            ok = getattr(translation, "success", bool(translated))
-
-            if ok and translated.strip() and is_probably_english(translated):
-                logger.info(
-                    f"ensure_english(): translated {detection.indictrans_code} -> eng_Latn "
-                    f"({len(text)} -> {len(translated)} chars)"
-                )
-                return translated
-
-            logger.error(
-                "ensure_english(): translation produced unusable output "
-                f"(success={ok}, len={len(translated)}). Falling back to original text."
-            )
         except Exception as e:
-            logger.error(f"ensure_english(): inline translation failed: {e}")
+            logger.error(
+                f"Both GLiNER and spaCy failed to load: {e}"
+            )
 
-        return text
+            self._extraction_engine = "regex_only"
 
-    # ================================================================
-    # Stage 3: spaCy NER with source spans
-    # ================================================================
+    # ========================================================
+    # ENTITY EXTRACTION
+    # ========================================================
+
     def extract_entities_with_spans(
         self,
         text: str,
-        already_english: bool = False,
     ) -> list[dict]:
-        """
-        Extract entities using spaCy with character-level offsets.
 
-        Args:
-            text: FIR text (any language — translated automatically)
-            already_english: set True by ForensicPipeline to skip the check
-
-        Returns:
-            [{"text", "label", "start", "end", "source_sentence", "page"}, ...]
         """
-        if not self.nlp or not text:
+        Extract entities using:
+
+            GLiNER OR spaCy
+            +
+            Regex
+
+        Returns entities with source spans.
+        """
+
+        if not text or len(text.strip()) < 5:
             return []
 
-        work_text = text if already_english else self.ensure_english(text)
-        if not work_text:
-            return []
+        entities = []
 
-        entities: list[dict] = []
-        doc = self.nlp(work_text)
+        # ----------------------------------------------------
+        # GLiNER
+        # ----------------------------------------------------
 
-        # Build a sentence index once (O(n) instead of O(n*m))
-        try:
-            sents = [(s.start_char, s.end_char, s.text.strip()) for s in doc.sents]
-        except Exception:
-            sents = []
+        if (
+            self._extraction_engine == "gliner"
+            and self._gliner_model
+        ):
+            entities.extend(
+                self._extract_with_gliner(text)
+            )
 
-        def sentence_for(start: int, end: int) -> str:
-            for s_start, s_end, s_text in sents:
-                if s_start <= start and s_end >= end:
-                    return s_text[:200]
-            return ""
+        # ----------------------------------------------------
+        # spaCy fallback
+        # ----------------------------------------------------
 
-        for ent in doc.ents:
-            label = ent.label_
-            value = ent.text.strip()
+        elif (
+            self._extraction_engine == "spacy"
+            and self._spacy_nlp
+        ):
+            entities.extend(
+                self._extract_with_spacy(text)
+            )
 
-            if label in ("PERSON", "PER"):
-                value = _clean_person_name(value)
-                if not _is_valid_person(value):
-                    continue
-            else:
-                if contains_indic(value):     # Devanagari leakage guard
-                    continue
-                if len(value) < 2:
-                    continue
+        # ----------------------------------------------------
+        # Regex ALWAYS runs
+        # ----------------------------------------------------
 
-            entities.append({
-                "text": value,
-                "label": label,
-                "start": ent.start_char,
-                "end": ent.end_char,
-                "source_sentence": sentence_for(ent.start_char, ent.end_char),
-                "page": 1,
-            })
+        entities.extend(
+            self._extract_with_regex(text)
+        )
 
-        entities.extend(self._extract_custom_entities(work_text, sentence_for))
-        entities = self._deduplicate_entities(entities)
+        # ----------------------------------------------------
+        # Deduplicate overlapping entities
+        # ----------------------------------------------------
+
+        entities = self._deduplicate_entities(
+            entities
+        )
 
         logger.info(
-            f"spaCy NER: {len(entities)} entities "
-            f"({sum(1 for e in entities if e['label'] in ('PERSON', 'PER'))} persons, "
-            f"{sum(1 for e in entities if e['label'] in ('GPE', 'LOC'))} locations, "
-            f"{sum(1 for e in entities if e['label'] == 'ORG')} orgs, "
-            f"{sum(1 for e in entities if e['label'] == 'PHONE')} phones)"
+            f"NER: {len(entities)} entities via "
+            f"{self._extraction_engine} "
+            f"("
+            f"{sum(1 for e in entities if e['label'] == 'PERSON')}"
+            f" persons)"
         )
+
         return entities
 
-    def _extract_custom_entities(self, text: str, sentence_for) -> list[dict]:
-        """Extract Indian-specific entities using regex patterns."""
-        custom: list[dict] = []
+    # ========================================================
+    # GLiNER ENTITY EXTRACTION
+    # ========================================================
 
-        # (label, pattern, capture_group)
+    def _extract_with_gliner(
+        self,
+        text: str,
+    ) -> list[dict]:
+
+        """
+        GLiNER entity extraction.
+
+        Long text is split into sentence-aware chunks.
+        Individual long sentences are hard-split so GLiNER
+        does not receive excessively long sequences.
+        """
+
+        try:
+            chunks = self._chunk_text(
+                text,
+                max_chars=900,
+            )
+
+            all_entities = []
+
+            for chunk, offset in chunks:
+
+                try:
+                    raw = self._gliner_model.predict_entities(
+                        chunk,
+                        CRIME_ENTITY_LABELS,
+                        threshold=GLINER_THRESHOLD,
+                    )
+
+                except Exception as e:
+                    logger.warning(
+                        f"GLiNER chunk failed: {e}"
+                    )
+                    continue
+
+                for ent in raw:
+
+                    gliner_label = (
+                        ent.get("label", "")
+                        .lower()
+                        .strip()
+                    )
+
+                    db_label = GLINER_LABEL_TO_DB.get(
+                        gliner_label,
+                        "ORGANIZATION",
+                    )
+
+                    ent_start = ent.get(
+                        "start",
+                        0,
+                    )
+
+                    ent_end = ent.get(
+                        "end",
+                        0,
+                    )
+
+                    source_sentence = (
+                        self._find_source_sentence(
+                            chunk,
+                            ent_start,
+                            ent_end,
+                        )
+                    )
+
+                    entity_text = (
+                        ent.get("text", "")
+                        .strip()
+                    )
+
+                    if not entity_text:
+                        continue
+
+                    all_entities.append(
+                        {
+                            "text": entity_text,
+                            "label": db_label,
+                            "gliner_label": gliner_label,
+                            "start": offset + ent_start,
+                            "end": offset + ent_end,
+                            "confidence": round(
+                                float(
+                                    ent.get(
+                                        "score",
+                                        0.0,
+                                    )
+                                ),
+                                3,
+                            ),
+                            "source_sentence": (
+                                source_sentence[:200]
+                            ),
+                            "page": 1,
+                            "engine": "gliner",
+                        }
+                    )
+
+            return all_entities
+
+        except Exception as e:
+            logger.error(
+                f"GLiNER extraction failed: {e}"
+            )
+
+            return []
+
+    # ========================================================
+    # SPACY ENTITY EXTRACTION
+    # ========================================================
+
+    def _extract_with_spacy(
+        self,
+        text: str,
+    ) -> list[dict]:
+
+        entities = []
+
+        try:
+            doc = self._spacy_nlp(text)
+
+            spacy_map = {
+                "PERSON": "PERSON",
+                "ORG": "ORGANIZATION",
+                "GPE": "LOCATION",
+                "LOC": "LOCATION",
+                "DATE": "DATE",
+                "MONEY": "MONEY",
+                "TIME": "DATE",
+                "CARDINAL": "DATE",
+                "LAW": "ORGANIZATION",
+                "EVENT": "ORGANIZATION",
+                "FAC": "LOCATION",
+            }
+
+            for ent in doc.ents:
+
+                if ent.label_ not in spacy_map:
+                    continue
+
+                sentence = next(
+                    (
+                        sent.text.strip()
+                        for sent in doc.sents
+                        if (
+                            sent.start_char
+                            <= ent.start_char
+                            and
+                            sent.end_char
+                            >= ent.end_char
+                        )
+                    ),
+                    "",
+                )
+
+                entities.append(
+                    {
+                        "text": ent.text.strip(),
+                        "label": spacy_map[ent.label_],
+                        "gliner_label": (
+                            ent.label_.lower()
+                        ),
+                        "start": ent.start_char,
+                        "end": ent.end_char,
+                        "confidence": 0.85,
+                        "source_sentence": (
+                            sentence[:200]
+                        ),
+                        "page": 1,
+                        "engine": "spacy",
+                    }
+                )
+
+        except Exception as e:
+            logger.error(
+                f"spaCy extraction failed: {e}"
+            )
+
+        return entities
+
+    # ========================================================
+    # REGEX EXTRACTION
+    # ========================================================
+
+    def _extract_with_regex(
+        self,
+        text: str,
+    ) -> list[dict]:
+
+        """
+        Deterministic extraction for structured identifiers.
+        """
+
+        regex_entities = []
+
         patterns = [
-            ("PHONE",        self._phone_pattern,        0),
-            ("VEHICLE",      self._vehicle_pattern,      0),
-            ("LAW_SECTION",  self._law_pattern,          0),
-            ("CRYPTO_WALLET", self._crypto_pattern,      0),
-            ("BANK_ACCOUNT", self._bank_account_pattern, 1),
-            ("PINCODE",      self._pincode_pattern,      1),
-            ("IMEI",         self._imei_pattern,         0),
+            (
+                "PHONE",
+                self._phone_pattern,
+                "phone number",
+            ),
+            (
+                "PHONE",
+                self._imei_pattern,
+                "imei",
+            ),
+            (
+                "VEHICLE",
+                self._vehicle_pattern,
+                "vehicle registration",
+            ),
+            (
+                "ORGANIZATION",
+                self._law_pattern,
+                "law section",
+            ),
+            (
+                "LOCATION",
+                self._pincode_pattern,
+                "pincode",
+            ),
+            (
+                "PERSON",
+                self._aadhaar_pattern,
+                "aadhaar number",
+            ),
+            (
+                "BANK_ACCOUNT",
+                self._ifsc_pattern,
+                "ifsc code",
+            ),
+            (
+                "PERSON",
+                self._pan_pattern,
+                "pan card",
+            ),
+            (
+                "BANK_ACCOUNT",
+                self._upi_pattern,
+                "upi id",
+            ),
         ]
 
-        claimed: list[tuple[int, int]] = []
+        for db_label, pattern, gliner_label in patterns:
 
-        for label, pattern, group in patterns:
             for match in pattern.finditer(text):
-                start, end = match.span(group)
-                value = match.group(group).strip()
 
-                if len(value) < 4:
+                matched_text = (
+                    match.group().strip()
+                )
+
+                if len(matched_text) < 4:
                     continue
-                # skip if this span is inside an already-claimed higher-priority span
-                if any(s <= start and end <= e for s, e in claimed):
-                    continue
 
-                claimed.append((start, end))
-                custom.append({
-                    "text": value,
-                    "label": label,
-                    "start": start,
-                    "end": end,
-                    "source_sentence": sentence_for(start, end),
-                    "page": 1,
-                })
+                source_sentence = (
+                    self._find_source_sentence(
+                        text,
+                        match.start(),
+                        match.end(),
+                    )
+                )
 
-        return custom
+                regex_entities.append(
+                    {
+                        "text": matched_text,
+                        "label": db_label,
+                        "gliner_label": gliner_label,
+                        "start": match.start(),
+                        "end": match.end(),
+                        "confidence": 1.0,
+                        "source_sentence": (
+                            source_sentence[:200]
+                        ),
+                        "page": 1,
+                        "engine": "regex",
+                    }
+                )
 
-    def _deduplicate_entities(self, entities: list[dict]) -> list[dict]:
-        """Remove overlapping spans (keep longest) and exact value repeats."""
+        return regex_entities
+
+    # ========================================================
+    # GLiNER CHUNKING
+    # ========================================================
+
+    @staticmethod
+    def _chunk_text(
+        text: str,
+        max_chars: int = 900,
+    ) -> list[tuple[str, int]]:
+
+        """
+        Sentence-aware chunking for GLiNER.
+
+        Why 900 characters?
+
+        GLiNER internally has a token limit. Character count is
+        not identical to token count, but keeping chunks around
+        900 characters provides a safe practical margin.
+
+        Strategy:
+
+            paragraph/sentence
+                    ↓
+            accumulate sentences
+                    ↓
+            max_chars reached
+                    ↓
+            create chunk
+
+        If one sentence itself is too long:
+
+            long sentence
+                    ↓
+            whitespace-aware hard split
+                    ↓
+            small chunks
+        """
+
+        if not text or not text.strip():
+            return []
+
+        # ----------------------------------------------------
+        # Sentence splitting
+        #
+        # Supports:
+        #   .
+        #   !
+        #   ?
+        #   ।
+        #   newlines
+        # ----------------------------------------------------
+
+        sentences = re.split(
+            r"(?<=[.!?।])\s+|\n+",
+            text.strip(),
+        )
+
+        sentences = [
+            sentence.strip()
+            for sentence in sentences
+            if sentence.strip()
+        ]
+
+        chunks: list[tuple[str, int]] = []
+
+        current_parts: list[str] = []
+        current_length = 0
+        current_start = None
+
+        # Track original location approximately by searching
+        # sequentially through the original text.
+        search_position = 0
+
+        for sentence in sentences:
+
+            sentence_start = text.find(
+                sentence,
+                search_position,
+            )
+
+            if sentence_start == -1:
+                sentence_start = search_position
+
+            sentence_end = (
+                sentence_start + len(sentence)
+            )
+
+            search_position = sentence_end
+
+            # ------------------------------------------------
+            # Sentence fits into current chunk
+            # ------------------------------------------------
+
+            additional_length = (
+                len(sentence)
+                + (1 if current_parts else 0)
+            )
+
+            if (
+                current_parts
+                and
+                current_length + additional_length
+                <= max_chars
+            ):
+                current_parts.append(sentence)
+                current_length += additional_length
+                continue
+
+            # ------------------------------------------------
+            # Save existing chunk
+            # ------------------------------------------------
+
+            if current_parts:
+
+                chunk_text = " ".join(
+                    current_parts
+                )
+
+                chunks.append(
+                    (
+                        chunk_text,
+                        current_start if current_start is not None else 0,
+                    )
+                )
+
+                current_parts = []
+                current_length = 0
+                current_start = None
+
+            # ------------------------------------------------
+            # Sentence itself fits
+            # ------------------------------------------------
+
+            if len(sentence) <= max_chars:
+
+                current_parts = [sentence]
+                current_length = len(sentence)
+                current_start = sentence_start
+
+                continue
+
+            # ------------------------------------------------
+            # Individual sentence is too long
+            #
+            # Hard split on whitespace rather than cutting
+            # through words.
+            # ------------------------------------------------
+
+            words = sentence.split()
+
+            piece_words: list[str] = []
+            piece_length = 0
+            piece_start = sentence_start
+
+            cursor = sentence_start
+
+            for word in words:
+
+                word_position = text.find(
+                    word,
+                    cursor,
+                )
+
+                if word_position == -1:
+                    word_position = cursor
+
+                cursor = (
+                    word_position
+                    + len(word)
+                )
+
+                additional = (
+                    len(word)
+                    + (1 if piece_words else 0)
+                )
+
+                if (
+                    piece_words
+                    and
+                    piece_length + additional
+                    > max_chars
+                ):
+
+                    piece = " ".join(
+                        piece_words
+                    )
+
+                    chunks.append(
+                        (
+                            piece,
+                            piece_start,
+                        )
+                    )
+
+                    piece_words = []
+                    piece_length = 0
+
+                    # Start next piece approximately at
+                    # the current word.
+                    piece_start = word_position
+
+                piece_words.append(word)
+
+                piece_length += (
+                    len(word)
+                    + (1 if len(piece_words) > 1 else 0)
+                )
+
+            if piece_words:
+
+                piece = " ".join(
+                    piece_words
+                )
+
+                chunks.append(
+                    (
+                        piece,
+                        piece_start,
+                    )
+                )
+
+        # ----------------------------------------------------
+        # Final accumulated chunk
+        # ----------------------------------------------------
+
+        if current_parts:
+
+            chunk_text = " ".join(
+                current_parts
+            )
+
+            chunks.append(
+                (
+                    chunk_text,
+                    current_start if current_start is not None else 0,
+                )
+            )
+
+        return chunks
+
+    # ========================================================
+    # SOURCE SENTENCE
+    # ========================================================
+
+    @staticmethod
+    def _find_source_sentence(
+        text: str,
+        start: int,
+        end: int,
+    ) -> str:
+
+        """
+        Extract the sentence containing an entity.
+        Supports English and Devanagari danda punctuation.
+        """
+
+        if not text:
+            return ""
+
+        start = max(
+            0,
+            min(start, len(text)),
+        )
+
+        end = max(
+            start,
+            min(end, len(text)),
+        )
+
+        # ----------------------------------------------------
+        # First try proper sentence boundaries
+        # ----------------------------------------------------
+
+        left_boundary = max(
+            text.rfind(".", 0, start),
+            text.rfind("!", 0, start),
+            text.rfind("?", 0, start),
+            text.rfind("।", 0, start),
+            text.rfind("\n", 0, start),
+        )
+
+        right_candidates = [
+            position
+            for position in [
+                text.find(".", end),
+                text.find("!", end),
+                text.find("?", end),
+                text.find("।", end),
+                text.find("\n", end),
+            ]
+            if position != -1
+        ]
+
+        if right_candidates:
+            right_boundary = min(
+                right_candidates
+            )
+        else:
+            right_boundary = len(text)
+
+        sentence = text[
+            left_boundary + 1:right_boundary + 1
+        ].strip()
+
+        if sentence:
+            return sentence
+
+        # ----------------------------------------------------
+        # Fallback: local context
+        # ----------------------------------------------------
+
+        left = max(
+            0,
+            start - 150,
+        )
+
+        right = min(
+            len(text),
+            end + 150,
+        )
+
+        return text[left:right].strip()
+
+    # ========================================================
+    # ENTITY DEDUPLICATION
+    # ========================================================
+
+    @staticmethod
+    def _deduplicate_entities(
+        entities: list[dict],
+    ) -> list[dict]:
+
         if not entities:
             return []
 
-        entities.sort(key=lambda e: (e["start"], -(e["end"] - e["start"])))
+        # Sort by:
+        #   1. start position
+        #   2. confidence descending
+        #   3. longer entity first
+        entities.sort(
+            key=lambda e: (
+                e["start"],
+                -e.get("confidence", 0),
+                -(e["end"] - e["start"]),
+            )
+        )
 
-        deduped: list[dict] = []
-        last_end = -1
+        deduped = []
+
         for ent in entities:
-            if ent["start"] >= last_end:
+
+            if not deduped:
                 deduped.append(ent)
-                last_end = ent["end"]
-            elif deduped and (ent["end"] - ent["start"]) > (deduped[-1]["end"] - deduped[-1]["start"]):
-                deduped[-1] = ent
-                last_end = ent["end"]
-
-        # collapse duplicate (label, normalized value) — keep first occurrence
-        seen: set[tuple[str, str]] = set()
-        unique: list[dict] = []
-        for ent in deduped:
-            key = (ent["label"], re.sub(r"\s+", " ", ent["text"]).strip().lower())
-            if key in seen:
                 continue
-            seen.add(key)
-            unique.append(ent)
 
-        return unique
+            previous = deduped[-1]
 
-    # ================================================================
-    # Stage 5: Groq relationship extraction
-    # ================================================================
+            # ------------------------------------------------
+            # No overlap
+            # ------------------------------------------------
+
+            if ent["start"] >= previous["end"]:
+                deduped.append(ent)
+                continue
+
+            # ------------------------------------------------
+            # Overlap
+            #
+            # Keep the entity with higher confidence.
+            # If confidence is equal, keep the longer span.
+            # ------------------------------------------------
+
+            current_confidence = ent.get(
+                "confidence",
+                0,
+            )
+
+            previous_confidence = previous.get(
+                "confidence",
+                0,
+            )
+
+            current_length = (
+                ent["end"] - ent["start"]
+            )
+
+            previous_length = (
+                previous["end"]
+                - previous["start"]
+            )
+
+            if (
+                current_confidence
+                > previous_confidence
+                or (
+                    current_confidence
+                    == previous_confidence
+                    and current_length
+                    > previous_length
+                )
+            ):
+                deduped[-1] = ent
+
+        return deduped
+
+    # ========================================================
+    # RELATIONSHIP EXTRACTION
+    # ========================================================
+
     def extract_relationships(
         self,
         text: str,
         known_entities: Optional[list[str]] = None,
-        already_english: bool = False,
     ) -> list[dict]:
-        """Extract relationships using Groq LLM, with co-occurrence fallback."""
+
+        """
+        Relationship extraction:
+
+            Groq
+              ↓
+            fallback
+              ↓
+        co-occurrence relations
+        """
+
         if not text or len(text.strip()) < 50:
             return []
 
-        work_text = text if already_english else self.ensure_english(text)
-
         try:
-            relations = self._llm_layer(work_text, known_entities)
+
+            relations = self._llm_layer(
+                text,
+                known_entities,
+            )
+
             if relations:
-                relations = self._align_to_known(relations, known_entities)
-                logger.info(f"Groq relationships: {len(relations)} extracted")
                 return relations
-            logger.warning("Groq returned zero relations — using co-occurrence fallback")
+
         except Exception as e:
-            logger.warning(f"Groq relationship extraction failed: {e}")
 
-        return self._cooccurrence_relations(work_text)
+            logger.warning(
+                f"Groq relationship extraction failed: {e}"
+            )
 
-    @staticmethod
-    def _align_to_known(relations: list[dict], known: Optional[list[str]]) -> list[dict]:
-        """Snap LLM-returned names onto the canonical entity list so graph nodes match."""
-        if not known:
-            return relations
+        # ----------------------------------------------------
+        # Groq failed → deterministic fallback
+        # ----------------------------------------------------
 
-        lookup = {k.strip().lower(): k for k in known if k}
+        return self._cooccurrence_relations(
+            text
+        )
 
-        def snap(name: str) -> str:
-            n = (name or "").strip()
-            low = n.lower()
-            if low in lookup:
-                return lookup[low]
-            for k_low, k_orig in lookup.items():
-                if low and (low in k_low or k_low in low):
-                    return k_orig
-            return n
-
-        out = []
-        for r in relations:
-            src, tgt = snap(r.get("source", "")), snap(r.get("target", ""))
-            if not src or not tgt or src == tgt:
-                continue
-            out.append({**r, "source": src, "target": tgt})
-        return out
+    # ========================================================
+    # GROQ RELATIONSHIP EXTRACTION
+    # ========================================================
 
     def _llm_layer(
         self,
         text: str,
         known_entities: Optional[list[str]] = None,
     ) -> list[dict]:
-        """Groq LLM relationship extraction with automatic model fallback."""
-        # Re-read env at call time — avoids the "key loaded after import" trap
-        api_key = GROQ_API_KEY
-        if not api_key:
-            import os
-            api_key = os.getenv("GROQ_API_KEY", "")
-        if not api_key:
-            logger.error("GROQ_API_KEY missing — relationship extraction disabled")
-            return []
 
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        """
+        Extract semantic relationships using Groq.
 
-        entity_hint = ""
-        if known_entities:
-            uniq = list(dict.fromkeys([e for e in known_entities if e]))[:25]
-            entity_hint = (
-                "\nUse EXACTLY these names when they apply (do not invent or "
-                f"rename people): {', '.join(uniq)}"
+        Important design choice:
+
+        Groq returns ONLY:
+            source
+            target
+            relation
+
+        Evidence is recovered from the original FIR text
+        afterwards. This makes structured JSON generation
+        much more reliable and reduces token usage.
+        """
+
+        if not GROQ_API_KEY:
+
+            logger.warning(
+                "No GROQ_API_KEY set. "
+                "Skipping LLM relationship layer."
             )
 
-        prompt = f"""Extract all relationships between people mentioned in this FIR text.
-
-For each relationship, provide:
-- source: name of first person
-- target: name of second person
-- relation: one of [family, associate, same_organization, phone_call, financial_transfer]
-- evidence: the EXACT sentence from the text that proves this relationship
-
-Rules:
-- Only include relationships explicitly supported by the text.
-- Do not output a relationship between a person and themselves.
-- If no relationships exist, return {{"relations": []}}.
-{entity_hint}
-
-FIR Text:
-{text[:6000]}
-
-Respond with JSON: {{"relations": [{{"source": "...", "target": "...", "relation": "...", "evidence": "..."}}]}}"""
-
-        global _WORKING_GROQ_MODEL
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a crime intelligence analyst. Extract relationships "
-                    "from FIR text. Respond only with valid JSON."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
-
-        # Try the known-good model first, then walk the chain
-        candidates = (
-            [_WORKING_GROQ_MODEL] if _WORKING_GROQ_MODEL else []
-        ) + [m for m in _groq_model_candidates() if m != _WORKING_GROQ_MODEL]
-
-        last_error = None
-        for model_name in candidates:
-            for attempt in (1, 2):
-                try:
-                    response = client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=0.1,
-                        response_format={"type": "json_object"},
-                    )
-                    parsed = json.loads(response.choices[0].message.content)
-                    extraction = LlmExtraction.model_validate(parsed)
-
-                    if _WORKING_GROQ_MODEL != model_name:
-                        logger.info(f"Groq model in use: {model_name}")
-                        _WORKING_GROQ_MODEL = model_name
-
-                    return [
-                        {
-                            "source": r.source.strip(),
-                            "target": r.target.strip(),
-                            "relation": r.relation,
-                            "evidence": r.evidence,
-                        }
-                        for r in extraction.relations
-                        if r.source and r.target
-                    ]
-                except Exception as e:
-                    last_error = e
-                    msg = str(e)
-
-                    # Model gone/unavailable — don't retry, move to next model
-                    if any(
-                        tok in msg
-                        for tok in (
-                            "model_not_found",
-                            "does not exist",
-                            "decommissioned",
-                            "model_decommissioned",
-                        )
-                    ):
-                        logger.warning(
-                            f"Groq model '{model_name}' unavailable — trying next. "
-                            f"(Set GROQ_MODEL env var to pin a specific model.)"
-                        )
-                        if _WORKING_GROQ_MODEL == model_name:
-                            _WORKING_GROQ_MODEL = None
-                        break
-
-                    logger.warning(f"Groq [{model_name}] attempt {attempt}/2 failed: {e}")
-
-        logger.error(
-            f"LLM layer failed on all candidate models "
-            f"{candidates}: {last_error}"
-        )
-        return []
-
-    def _cooccurrence_relations(self, text: str) -> list[dict]:
-        """Fallback: paragraph-level person co-occurrence."""
-        if not self.nlp:
             return []
 
-        paragraphs = [p for p in text.split("\n\n") if len(p.strip()) >= 30]
-        relations: list[dict] = []
-        seen_pairs: set[tuple[str, str]] = set()
+        try:
+            from groq import Groq
 
-        for para in paragraphs:
-            para_doc = self.nlp(para)
-            persons = []
-            for ent in para_doc.ents:
-                if ent.label_ in ("PERSON", "PER"):
-                    name = _clean_person_name(ent.text)
-                    if _is_valid_person(name) and name not in persons:
-                        persons.append(name)
+            client = Groq(
+                api_key=GROQ_API_KEY
+            )
+
+            # ------------------------------------------------
+            # Known entity hints
+            # ------------------------------------------------
+
+            entity_hint = ""
+
+            if known_entities:
+
+                cleaned_entities = [
+                    str(entity).strip()
+                    for entity in known_entities[:20]
+                    if str(entity).strip()
+                ]
+
+                if cleaned_entities:
+
+                    entity_hint = (
+                        "\nKnown entities found by the "
+                        "NER system:\n"
+                        + "\n".join(
+                            f"- {entity}"
+                            for entity in cleaned_entities
+                        )
+                    )
+
+            # ------------------------------------------------
+            # Limit input size
+            # ------------------------------------------------
+
+            fir_text = text[:4000]
+
+            # ------------------------------------------------
+            # Strict JSON prompt
+            # ------------------------------------------------
+
+            prompt = f"""
+Extract relationships between people/entities explicitly
+mentioned in the following FIR.
+
+Allowed relationship types ONLY:
+
+- family
+- associate
+- same_organization
+- phone_call
+- financial_transfer
+
+Rules:
+
+1. Only create relationships directly supported by the FIR.
+2. Do not invent entities.
+3. Use the entity names exactly as they appear in the text
+   whenever possible.
+4. Do not create a relationship merely because two people
+   are mentioned somewhere in the document.
+5. Do not explain your reasoning.
+6. Do not return markdown.
+7. Do not return code fences.
+8. Return ONLY a JSON object.
+9. If no valid relationship exists, return:
+   {{"relations": []}}
+
+{entity_hint}
+
+FIR TEXT:
+{fir_text}
+
+Return exactly this JSON structure:
+
+{{
+  "relations": [
+    {{
+      "source": "Person A",
+      "target": "Person B",
+      "relation": "associate"
+    }}
+  ]
+}}
+"""
+
+            # ------------------------------------------------
+            # Groq request
+            # ------------------------------------------------
+
+            response = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a crime intelligence "
+                            "analyst specializing in relationship "
+                            "extraction from FIR documents. "
+                            "Return ONLY valid JSON."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+
+                temperature=0,
+
+                # Groq previously rejected ~1055 tokens
+                # because the organization's OTPM limit was 1000.
+                max_tokens=700,
+
+                response_format={"type": "json_object"},
+reasoning_format="hidden",
+reasoning_effort="none",
+            )
+
+            # ------------------------------------------------
+            # Extract model content
+            # ------------------------------------------------
+
+            content = (
+                response.choices[0]
+                .message
+                .content
+            )
+
+            if not content:
+
+                logger.error(
+                    "Groq returned empty content."
+                )
+
+                return []
+
+            logger.info(
+                "Groq relationship response: "
+                f"{content[:1500]}"
+            )
+
+            # ------------------------------------------------
+            # Parse JSON
+            # ------------------------------------------------
+
+            try:
+
+                parsed = json.loads(
+                    content
+                )
+
+            except json.JSONDecodeError as e:
+
+                logger.error(
+                    f"Groq returned invalid JSON: {e}"
+                )
+
+                logger.error(
+                    f"Raw Groq output: {content[:1500]}"
+                )
+
+                return []
+
+            # ------------------------------------------------
+            # Validate structure
+            # ------------------------------------------------
+
+            try:
+
+                extraction = (
+                    LlmExtraction.model_validate(
+                        parsed
+                    )
+                )
+
+            except Exception as e:
+
+                logger.error(
+                    f"Groq JSON schema validation failed: {e}"
+                )
+
+                logger.error(
+                    f"Parsed response: {parsed}"
+                )
+
+                return []
+
+            # ------------------------------------------------
+            # Convert to application format
+            # ------------------------------------------------
+
+            relations = []
+
+            for relation in extraction.relations:
+
+                source = relation.source.strip()
+                target = relation.target.strip()
+
+                if not source or not target:
+                    continue
+
+                if source.lower() == target.lower():
+                    continue
+
+                evidence = (
+                    self._find_relationship_evidence(
+                        text,
+                        source,
+                        target,
+                    )
+                )
+
+                relations.append(
+                    {
+                        "source": source,
+                        "target": target,
+                        "relation": relation.relation,
+                        "evidence": evidence,
+                    }
+                )
+
+            logger.info(
+                f"Groq extracted {len(relations)} "
+                "semantic relationships"
+            )
+
+            return relations
+
+        except Exception as e:
+
+            logger.error(
+                f"LLM layer error: {e}"
+            )
+
+            return []
+
+    # ========================================================
+    # RELATIONSHIP EVIDENCE
+    # ========================================================
+
+    @staticmethod
+    def _find_relationship_evidence(
+        text: str,
+        source: str,
+        target: str,
+    ) -> str:
+
+        """
+        Find the sentence containing both relationship endpoints.
+
+        This keeps evidence grounded in the original FIR instead
+        of asking the LLM to reproduce the sentence.
+        """
+
+        if not text:
+            return ""
+
+        sentences = re.split(
+            r"(?<=[.!?।])\s+|\n+",
+            text,
+        )
+
+        source_lower = source.lower()
+        target_lower = target.lower()
+
+        # ----------------------------------------------------
+        # Best case:
+        # both entities occur in same sentence
+        # ----------------------------------------------------
+
+        for sentence in sentences:
+
+            sentence = sentence.strip()
+
+            if not sentence:
+                continue
+
+            sentence_lower = sentence.lower()
+
+            if (
+                source_lower in sentence_lower
+                and target_lower in sentence_lower
+            ):
+                return sentence[:500]
+
+        # ----------------------------------------------------
+        # Second-best case:
+        # source and target occur close together
+        # ----------------------------------------------------
+
+        source_position = text.lower().find(
+            source_lower
+        )
+
+        target_position = text.lower().find(
+            target_lower
+        )
+
+        if (
+            source_position != -1
+            and target_position != -1
+        ):
+
+            left = max(
+                0,
+                min(
+                    source_position,
+                    target_position,
+                ) - 150,
+            )
+
+            right = min(
+                len(text),
+                max(
+                    source_position + len(source),
+                    target_position + len(target),
+                ) + 250,
+            )
+
+            return text[left:right].strip()[:500]
+
+        return (
+            f"Relationship extracted between "
+            f"{source} and {target}."
+        )
+
+    # ========================================================
+    # CO-OCCURRENCE FALLBACK
+    # ========================================================
+
+    def _cooccurrence_relations(
+        self,
+        text: str,
+    ) -> list[dict]:
+
+        """
+        Fallback relationship extraction.
+
+        IMPORTANT:
+        These are NOT semantic relationships.
+
+        They only indicate that two people were mentioned
+        in the same paragraph.
+
+        Therefore relation = associate.
+        """
+
+        entities_by_para = []
+
+        # ----------------------------------------------------
+        # GLiNER
+        # ----------------------------------------------------
+
+        if (
+            self._extraction_engine == "gliner"
+            and self._gliner_model
+        ):
+
+            paragraphs = [
+                p
+                for p in text.split("\n\n")
+                if len(p.strip()) > 30
+            ]
+
+            for para in paragraphs:
+
+                try:
+
+                    ents = (
+                        self._gliner_model
+                        .predict_entities(
+                            para,
+                            ["person"],
+                            threshold=GLINER_THRESHOLD,
+                        )
+                    )
+
+                    persons = list(
+                        dict.fromkeys(
+                            e["text"].strip()
+                            for e in ents
+                            if e.get("text", "").strip()
+                        )
+                    )
+
+                    entities_by_para.append(
+                        (
+                            para,
+                            persons,
+                        )
+                    )
+
+                except Exception as e:
+
+                    logger.debug(
+                        f"GLiNER fallback paragraph failed: {e}"
+                    )
+
+        # ----------------------------------------------------
+        # spaCy
+        # ----------------------------------------------------
+
+        elif (
+            self._extraction_engine == "spacy"
+            and self._spacy_nlp
+        ):
+
+            paragraphs = [
+                p
+                for p in text.split("\n\n")
+                if len(p.strip()) > 30
+            ]
+
+            for para in paragraphs:
+
+                try:
+
+                    doc = self._spacy_nlp(
+                        para
+                    )
+
+                    persons = list(
+                        dict.fromkeys(
+                            ent.text.strip()
+                            for ent in doc.ents
+                            if (
+                                ent.label_ == "PERSON"
+                                and ent.text.strip()
+                            )
+                        )
+                    )
+
+                    entities_by_para.append(
+                        (
+                            para,
+                            persons,
+                        )
+                    )
+
+                except Exception as e:
+
+                    logger.debug(
+                        f"spaCy fallback paragraph failed: {e}"
+                    )
+
+        else:
+            return []
+
+        # ----------------------------------------------------
+        # Build unique relationships
+        # ----------------------------------------------------
+
+        relations = []
+        seen_pairs = set()
+
+        for para, persons in entities_by_para:
 
             for i in range(len(persons)):
-                for j in range(i + 1, len(persons)):
-                    pair = tuple(sorted([persons[i], persons[j]]))
+
+                for j in range(
+                    i + 1,
+                    len(persons),
+                ):
+
+                    source = persons[i]
+                    target = persons[j]
+
+                    pair = tuple(
+                        sorted(
+                            [
+                                source,
+                                target,
+                            ]
+                        )
+                    )
+
                     if pair in seen_pairs:
                         continue
-                    seen_pairs.add(pair)
-                    relations.append({
-                        "source": pair[0],
-                        "target": pair[1],
-                        "relation": "associate",
-                        "evidence": f"Co-mentioned in FIR paragraph: {para[:100]}...",
-                    })
 
-        logger.info(f"Co-occurrence fallback: {len(relations)} relations")
+                    seen_pairs.add(pair)
+
+                    relations.append(
+                        {
+                            "source": pair[0],
+                            "target": pair[1],
+                            "relation": "associate",
+                            "evidence": (
+                                "Co-mentioned in paragraph: "
+                                f"{para[:300]}..."
+                            ),
+                        }
+                    )
+
+        logger.info(
+            f"Co-occurrence fallback generated "
+            f"{len(relations)} relationships"
+        )
+
         return relations
 
-    # ================================================================
-    # KEPT AS-IS: Direct CDR/Bank ingestion
-    # ================================================================
-    def extract_from_cdr(self, csv_path: str) -> list[dict]:
-        """Parse CDR CSV. UNCHANGED from original."""
+    # ========================================================
+    # STRUCTURED DATA — CDR
+    # ========================================================
+
+    def extract_from_cdr(
+        self,
+        csv_path: str,
+    ) -> list[dict]:
+
         import pandas as pd
+
         relations = []
+
         try:
-            df = pd.read_csv(csv_path)
+
+            df = pd.read_csv(
+                csv_path
+            )
+
             for idx, row in df.iterrows():
-                from_num = str(row.get("from_number", row.get("calling_number", "")))
-                to_num = str(row.get("to_number", row.get("called_number", "")))
-                if from_num and to_num:
-                    relations.append({
+
+                from_num = str(
+                    row.get(
+                        "from_number",
+                        row.get(
+                            "calling_number",
+                            "",
+                        ),
+                    )
+                ).strip()
+
+                to_num = str(
+                    row.get(
+                        "to_number",
+                        row.get(
+                            "called_number",
+                            "",
+                        ),
+                    )
+                ).strip()
+
+                if not from_num or not to_num:
+                    continue
+
+                relations.append(
+                    {
                         "source": from_num,
                         "target": to_num,
                         "relation": "phone_call",
                         "evidence": (
                             f"CDR row {idx + 1} @ "
-                            f"{row.get('timestamp', row.get('date', 'unknown'))} "
-                            f"(Duration: {row.get('duration', 'N/A')}s)"
+                            f"{row.get('timestamp', 'unknown')} "
+                            f"(Duration: "
+                            f"{row.get('duration', 'N/A')}s)"
                         ),
-                    })
+                    }
+                )
+
         except Exception as e:
-            logger.error(f"CDR parsing failed: {e}")
+
+            logger.error(
+                f"CDR parsing failed: {e}"
+            )
+
         return relations
 
-    def extract_from_bank(self, csv_path: str) -> list[dict]:
-        """Parse Bank CSV. UNCHANGED from original."""
+    # ========================================================
+    # STRUCTURED DATA — BANK
+    # ========================================================
+
+    def extract_from_bank(
+        self,
+        csv_path: str,
+    ) -> list[dict]:
+
         import pandas as pd
+
         relations = []
+
         try:
-            df = pd.read_csv(csv_path)
+
+            df = pd.read_csv(
+                csv_path
+            )
+
             for idx, row in df.iterrows():
-                from_acc = str(row.get("from_account", row.get("debit_account", "")))
-                to_acc = str(row.get("to_account", row.get("credit_account", "")))
-                amount = row.get("amount", row.get("transaction_amount", "N/A"))
-                if from_acc and to_acc:
-                    relations.append({
+
+                from_acc = str(
+                    row.get(
+                        "from_account",
+                        row.get(
+                            "debit_account",
+                            "",
+                        ),
+                    )
+                ).strip()
+
+                to_acc = str(
+                    row.get(
+                        "to_account",
+                        row.get(
+                            "credit_account",
+                            "",
+                        ),
+                    )
+                ).strip()
+
+                amount = row.get(
+                    "amount",
+                    row.get(
+                        "transaction_amount",
+                        "N/A",
+                    ),
+                )
+
+                if not from_acc or not to_acc:
+                    continue
+
+                relations.append(
+                    {
                         "source": from_acc,
                         "target": to_acc,
                         "relation": "financial_transfer",
                         "evidence": (
                             f"{amount} INR @ "
-                            f"{row.get('timestamp', row.get('date', 'unknown'))}"
+                            f"{row.get('timestamp', 'unknown')}"
                         ),
-                    })
+                    }
+                )
+
         except Exception as e:
-            logger.error(f"Bank parsing failed: {e}")
+
+            logger.error(
+                f"Bank parsing failed: {e}"
+            )
+
         return relations
 
 
-# ================================================================
-# Backward-compatible module-level entity extraction
-# Used by entity_agent.py and supervisor_agent.py  <-- the frontend path
-# ================================================================
+# ============================================================
+# MODULE-LEVEL SHARED EXTRACTOR
+# ============================================================
 
-_LABEL_MAP = {
-    "PERSON": EntityType.PERSON,
-    "PER": EntityType.PERSON,
-    "GPE": EntityType.LOCATION,
-    "LOC": EntityType.LOCATION,
-    "LOCATION": EntityType.LOCATION,
-    "FAC": EntityType.LOCATION,
-    "ORG": EntityType.ORGANIZATION,
-    "ORGANIZATION": EntityType.ORGANIZATION,
-    "PHONE": EntityType.PHONE,
-    "VEHICLE": EntityType.VEHICLE,
-    "BANK_ACCOUNT": EntityType.BANK_ACCOUNT,
-    "DATE": EntityType.DATE,
-    "ALIAS": EntityType.ALIAS,
-    "CRYPTO_WALLET": EntityType.CRYPTO_WALLET,
-}
-
-_SPACY_LAYER_LABELS = {
-    "PERSON", "PER", "GPE", "LOC", "LOCATION", "FAC",
-    "ORG", "ORGANIZATION", "DATE",
-}
-
-# Reuse one extractor — spaCy load is expensive and was previously
-# re-instantiated on every single agent call.
-_SHARED_EXTRACTOR: Optional[NLPExtractor] = None
+_shared_extractor = None
 
 
-def get_extractor() -> NLPExtractor:
-    global _SHARED_EXTRACTOR
-    if _SHARED_EXTRACTOR is None:
-        _SHARED_EXTRACTOR = NLPExtractor()
-    return _SHARED_EXTRACTOR
+def get_shared_extractor() -> NLPExtractor:
 
+    global _shared_extractor
+
+    if _shared_extractor is None:
+
+        _shared_extractor = NLPExtractor()
+
+    return _shared_extractor
+
+
+# ============================================================
+# BACKWARD-COMPATIBLE CONVENIENCE FUNCTIONS
+# ============================================================
 
 def extract_entities(
     text: str,
-    source_name: str = "agent",
-    case_id: Optional[str] = None,
-    already_english: bool = False,
-) -> EntityExtractionResponse:
-    """
-    Compatibility wrapper for the agentic pipeline.
+) -> list[dict]:
 
-    v2.2: now translation-safe. If `text` arrives in Devanagari (which is
-    what was happening from the frontend upload flow), it is translated to
-    English via IndicTrans2 before spaCy NER runs.
-    """
-    extractor = get_extractor()
-    warnings: list[str] = []
+    return (
+        get_shared_extractor()
+        .extract_entities_with_spans(text)
+    )
 
-    work_text = text if already_english else extractor.ensure_english(text)
-    if not already_english and work_text is not text:
-        warnings.append("Text was auto-translated to English before NER.")
 
-    raw_entities = extractor.extract_entities_with_spans(work_text, already_english=True)
+def extract_entities_with_spans(
+    text: str,
+) -> list[dict]:
 
-    entities: list[Entity] = []
-    for item in raw_entities:
-        label = (item.get("label") or "").upper()
-        value = (item.get("text") or "").strip()
-        if not value:
-            continue
+    return (
+        get_shared_extractor()
+        .extract_entities_with_spans(text)
+    )
 
-        entity_type = _LABEL_MAP.get(label)
-        if entity_type is None:
-            continue
-        if contains_indic(value):     # final safety net before the UI
-            continue
 
-        entities.append(
-            Entity(
-                id=None,
-                type=entity_type,
-                value=value,
-                confidence=0.85 if label in _SPACY_LAYER_LABELS else 0.95,
-                extracted_from=source_name,
-                layer="spacy" if label in _SPACY_LAYER_LABELS else "regex",
-                attributes={
-                    "start": item.get("start"),
-                    "end": item.get("end"),
-                    "source_sentence": item.get("source_sentence", ""),
-                    "page": item.get("page", 1),
-                    **({"case_id": case_id} if case_id else {}),
-                },
-            )
+def extract_relationships(
+    text: str,
+    known_entities: Optional[list[str]] = None,
+) -> list[dict]:
+
+    return (
+        get_shared_extractor()
+        .extract_relationships(
+            text,
+            known_entities,
         )
-
-    known_entity_names = [e.value for e in entities if e.type == EntityType.PERSON]
-
-    relations = extractor.extract_relationships(
-        work_text,
-        known_entities=known_entity_names,
-        already_english=True,
     )
 
-    llm_used = bool(relations) and not all(
-        r.get("evidence", "").startswith("Co-mentioned") for r in relations
+
+def extract_from_cdr(
+    csv_path: str,
+) -> list[dict]:
+
+    return (
+        get_shared_extractor()
+        .extract_from_cdr(csv_path)
     )
 
-    if not relations:
-        warnings.append("No relationships extracted.")
 
-    logger.info(
-        f"extract_entities(): {len(entities)} entities, "
-        f"{len(relations)} relations, llm_used={llm_used}, source={source_name}"
-    )
+def extract_from_bank(
+    csv_path: str,
+) -> list[dict]:
 
-    return EntityExtractionResponse(
-        entities=entities,
-        relations=relations,
-        llm_used=llm_used,
-        warnings=warnings,
+    return (
+        get_shared_extractor()
+        .extract_from_bank(csv_path)
     )

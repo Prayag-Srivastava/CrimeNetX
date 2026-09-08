@@ -29,6 +29,7 @@ sentencepiece>=0.1.99
 sacremoses>=0.0.53
 indictranstoolkit
 # ── STAGE 3: NER ──
+gliner>=0.2.0
 spacy>=3.7.0
 
 # ── STAGE 4: ENTITY RESOLUTION ──

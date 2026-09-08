@@ -44,7 +44,17 @@ class Settings(BaseSettings):
     TRANSLATION_MAX_LENGTH: int = 256
     TRANSLATION_BATCH_SIZE: int = 8
 
-    # --- STAGE 3: NER SETTINGS ---
+   
+    # STAGE 3: NER (GLiNER + spaCy fallback)
+    # ========================
+    # GLiNER model: "urchade/gliner_medium-v2.1" (best balance) 
+    #   or "urchade/gliner_small-v2.1" (faster)
+    #   or "urchade/gliner_large-v2.1" (most accurate)
+    #   or "urchade/gliner_multi-v2.1" (Hindi/Marathi native support)
+    GLINER_MODEL: str = os.getenv("GLINER_MODEL", "urchade/gliner_medium-v2.1")
+    GLINER_THRESHOLD: float = 0.4   # Minimum confidence to accept an entity
+    USE_GLINER: bool = True          # If False, falls back to spaCy
+    
     SPACY_MODEL: str = os.getenv("SPACY_MODEL", "en_core_web_sm")
 
     # --- STAGE 4: ENTITY RESOLUTION (SPLINK) ---
@@ -93,7 +103,9 @@ SPLINK_MATCH_THRESHOLD = settings.SPLINK_MATCH_THRESHOLD
 SPLINK_REVIEW_THRESHOLD = settings.SPLINK_REVIEW_THRESHOLD
 GROQ_API_KEY = settings.GROQ_API_KEY
 GROQ_MODEL = settings.GROQ_MODEL
-
+GLINER_MODEL = settings.GLINER_MODEL
+GLINER_THRESHOLD = settings.GLINER_THRESHOLD
+USE_GLINER = settings.USE_GLINER
 OCR_LANGUAGES = {
     "hindi": "hin",
     "marathi": "mar",
