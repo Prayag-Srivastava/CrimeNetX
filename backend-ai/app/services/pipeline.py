@@ -208,18 +208,39 @@ class ForensicPipeline:
         except Exception as e:
             result.stage_errors.append(f"Storage error: {e}")
 
-        # ============================================================
-        # STAGE 3: NER (spaCy on translated English text)
-        # ============================================================
-        logger.info("STAGE 3: NER")
+        # # ============================================================
+        # # STAGE 3: NER (spaCy on translated English text)
+        # # ============================================================
+        # logger.info("STAGE 3: NER")
+        # try:
+        #     nlp = self._get_nlp_extractor()
+        #     result.entities = nlp.extract_entities_with_spans(result.translated_text)
+        #     logger.info(f"NER: {len(result.entities)} entities")
+        # except Exception as e:
+        #     result.stage_errors.append(f"Stage 3 error: {e}")
+        #     result.entities = []
+        logger.info("STAGE 3+5: Joint IE (GLiNER-relex)")
         try:
             nlp = self._get_nlp_extractor()
-            result.entities = nlp.extract_entities_with_spans(result.translated_text)
-            logger.info(f"NER: {len(result.entities)} entities")
+            if hasattr(nlp, "extract_entities_and_relations"):
+                result.entities, result.relationships = nlp.extract_entities_and_relations(
+                    result.translated_text
+                )
+            else:
+                result.entities = nlp.extract_entities_with_spans(result.translated_text)
+                result.relationships = nlp.extract_relationships(
+                    result.translated_text,
+                    [e["text"] for e in result.entities if e["label"] == "PERSON"],
+                )
+            logger.info(
+                f"IE: {len(result.entities)} ents, {len(result.relationships)} rels "
+                f"({getattr(nlp, '_extraction_engine', '?')})"
+            )
         except Exception as e:
-            result.stage_errors.append(f"Stage 3 error: {e}")
-            result.entities = []
+            result.stage_errors.append(f"Stage 3/5 error: {e}")
+            result.entities, result.relationships = [], []
 
+        # then STAGE 4 Splink on PERSON entities (unchanged)
         # ============================================================
         # STAGE 4: ENTITY RESOLUTION (Splink)
         # ============================================================
@@ -250,29 +271,31 @@ class ForensicPipeline:
         except Exception as e:
             result.stage_errors.append(f"Stage 4 error: {e}")
 
-        # ============================================================
-        # STAGE 5: RELATIONSHIPS (Groq — KEPT AS-IS)
-        # ============================================================
-        logger.info("STAGE 5: Relationships (Groq)")
-        try:
-            nlp = self._get_nlp_extractor()
-            result.relationships = nlp.extract_relationships(
-                result.translated_text,
-                known_entities=[e["text"] for e in result.entities if e["label"] == "PERSON"],
-            )
-            logger.info(f"Relationships: {len(result.relationships)} found")
-        except Exception as e:
-            result.stage_errors.append(f"Stage 5 error: {e}")
-            result.relationships = []
+        # # ============================================================
+        # # STAGE 5: RELATIONSHIPS (Groq — KEPT AS-IS)
+        # # ============================================================
+        # logger.info("STAGE 5: Relationships (Groq)")
+        # try:
+        #     nlp = self._get_nlp_extractor()
+        #     result.relationships = nlp.extract_relationships(
+        #         result.translated_text,
+        #         known_entities=[e["text"] for e in result.entities if e["label"] == "PERSON"],
+        #     )
+        #     logger.info(f"Relationships: {len(result.relationships)} found")
+        # except Exception as e:
+        #     result.stage_errors.append(f"Stage 5 error: {e}")
+        #     result.relationships = []
 
-        # ---- Finalize ----
-        result.processing_time_seconds = round(time.time() - start_time, 2)
-        result.success = len(result.stage_errors) == 0 or len(result.entities) > 0
+        # # ---- Finalize ----
+        # result.processing_time_seconds = round(time.time() - start_time, 2)
+        # result.success = len(result.stage_errors) == 0 or len(result.entities) > 0
 
-        logger.info(
-            f"=== Pipeline complete in {result.processing_time_seconds}s | "
-            f"success={result.success} | entities={len(result.entities)} | "
-            f"relations={len(result.relationships)} | errors={len(result.stage_errors)} ==="
-        )
+        # logger.info(
+        #     f"=== Pipeline complete in {result.processing_time_seconds}s | "
+        #     f"success={result.success} | entities={len(result.entities)} | "
+        #     f"relations={len(result.relationships)} | errors={len(result.stage_errors)} ==="
+        # )
+
+        
 
         return result
