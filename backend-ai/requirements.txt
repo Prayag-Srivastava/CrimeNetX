@@ -1,42 +1,66 @@
-# ── EXISTING DEPENDENCIES (keep these) ──
-fastapi>=0.104.0
-uvicorn>=0.24.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-python-dotenv>=1.0.0
-python-multipart>=0.0.6
-httpx>=0.25.0
-redis>=5.0.0
-chromadb>=0.4.0
-groq>=0.4.0
-google-generativeai>=0.3.0
-reportlab>=4.0.0
-qrcode>=7.4.0
-networkx>=3.0
-matplotlib>=3.8.0
-numpy>=2.1.0
-pandas>=2.1.0
+# CrimeNetX — FastAPI AI/ML service dependencies (Python 3.11+)
 
-# ── STAGE 1: OCR ──
+# ── CORE API / CONFIGURATION ──────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dotenv>=1.0.0
+python-multipart==0.0.20
+requests==2.32.3
+httpx==0.28.1
+
+# ── LLM PROVIDERS / AGENTS ────────────────────────────────────────────────
+groq==0.30.0
+google-generativeai==0.8.3
+langgraph==0.2.60
+langchain==0.3.13
+langchain-groq==0.2.1
+
+# ── NLP / NER ─────────────────────────────────────────────────────────────
+spacy==3.8.4
+# model: python -m spacy download en_core_web_sm
+
+# ── GRAPH / ML ────────────────────────────────────────────────────────────
+# NetworkX retained because some AI/ML analysis code may still use it.
+# Neo4j is the primary graph database/backend in the new architecture.
+networkx==3.4.2
+neo4j==5.27.0
+scikit-learn==1.6.0
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.14.1
+
+# ── DOCUMENT PROCESSING ───────────────────────────────────────────────────
+PyMuPDF==1.25.1
+pypdf==5.1.0
+reportlab==4.2.5
+qrcode==8.0
+Pillow==11.0.0
+matplotlib==3.10.0
+
+# ── OCR / TESSERACT ───────────────────────────────────────────────────────
 pytesseract>=0.3.10
 pdf2image>=1.16.3
-Pillow>=10.0.0
 
-# ── STAGE 2: TRANSLATION ──
+# ── INDIC / TRANSLATION ───────────────────────────────────────────────────
 torch>=2.5.0
-transformers==4.53.2
+transformers==4.57.1
 sentencepiece>=0.1.99
 sacremoses>=0.0.53
 indictranstoolkit
-# ── STAGE 3: NER ──
-spacy>=3.7.0
 
-# ── STAGE 4: ENTITY RESOLUTION ──
+# ── ENTITY RESOLUTION / SPLINK ────────────────────────────────────────────
 splink>=4.0.0
 duckdb>=0.9.0
 
-# ── UTILITIES ──
+# ── VECTOR STORE / CACHE / DATABASE ───────────────────────────────────────
+chromadb==0.5.23
+redis==5.2.1
+psycopg2-binary==2.9.10
+
+# ── UTILITIES / LANGUAGE DETECTION ────────────────────────────────────────
 langdetect>=1.0.9
-loguru>=0.7.0
-langgraph>=0.2.0
-scikit-learn>=1.4.0
+
+# ── OBSERVABILITY ──────────────────────────────────────────────────────────
+loguru==0.7.2

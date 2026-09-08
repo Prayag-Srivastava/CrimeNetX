@@ -1,5 +1,4 @@
-"""
-CrimeNetX AI Service — Unified Pydantic Schemas
+"""CrimeNetX — Unified Pydantic v2 schemas for the AI service.
 
 Combines:
 - Existing CrimeNetX NLP / graph / financial / vision schemas
@@ -14,12 +13,12 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-# ============================================================================
-# CORE ENUMS
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
 
 class EntityType(str, Enum):
     PERSON = "PERSON"
@@ -28,9 +27,15 @@ class EntityType(str, Enum):
     VEHICLE = "VEHICLE"
     ORGANIZATION = "ORGANIZATION"
     BANK_ACCOUNT = "BANK_ACCOUNT"
+    CRYPTO_WALLET = "CRYPTO_WALLET"
     DATE = "DATE"
     ALIAS = "ALIAS"
-    CRYPTO_WALLET = "CRYPTO_WALLET"
+
+
+class GraphRole(str, Enum):
+    KINGPIN = "KINGPIN"
+    BROKER = "BROKER"
+    EXECUTOR = "EXECUTOR"
 
 
 class RelationType(str, Enum):
@@ -43,12 +48,6 @@ class RelationType(str, Enum):
     CO_ACCUSED = "co_accused"
     VICTIM_OF = "victim_of"
     WITNESS_TO = "witness_to"
-
-
-class GraphRole(str, Enum):
-    KINGPIN = "KINGPIN"
-    BROKER = "BROKER"
-    EXECUTOR = "EXECUTOR"
 
 
 class OCRStatus(str, Enum):
@@ -72,30 +71,33 @@ class TimelineState(str, Enum):
     ABSENT = "ABSENT"
 
 
-# ============================================================================
-# NLP / ENTITY EXTRACTION
-# ============================================================================
+# ---------------------------------------------------------------------------
+# NLP / Entity extraction
+# ---------------------------------------------------------------------------
 
 class Entity(BaseModel):
     """A single extracted entity with provenance."""
 
+    model_config = ConfigDict(extra="forbid")
+
     id: Optional[str] = None
     type: EntityType
     value: str
-    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
-
+    confidence: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+    )
     extracted_from: str = Field(
         default="",
         description="For example FIR-2023/045 §3 or CDR row 12",
     )
-
     layer: Literal["spacy", "regex", "llm"] = "spacy"
-
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
 class EntityExtractionRequest(BaseModel):
-    case_id: Optional[str] = None
+    case_id: str | None = None
     text: str = Field(
         min_length=1,
         description="Raw FIR narrative text",
@@ -110,9 +112,26 @@ class EntityExtractionResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class CDRRow(BaseModel):
+    from_number: str
+    to_number: str
+    duration_sec: int = 0
+    call_time: datetime
+    cell_tower: str = ""
+    imei: str = ""
+
+
 class CDRExtractionRequest(BaseModel):
-    rows: list[dict[str, Any]] = Field(default_factory=list)
+    rows: list[CDRRow | dict[str, Any]] = Field(default_factory=list)
     case_id: Optional[str] = None
+
+
+class BankTransaction(BaseModel):
+    from_account: str
+    to_account: str
+    amount: float
+    timestamp: datetime
+    transaction_type: str = "NEFT"
 
 
 class EntitySpan(BaseModel):
@@ -131,14 +150,17 @@ class NerResult(BaseModel):
     text_hash: str = ""
 
 
-# ============================================================================
+# ---------------------------------------------------------------------------
 # V2 OCR
-# ============================================================================
+# ---------------------------------------------------------------------------
 
 class OcrPageResult(BaseModel):
     page_number: int
     text: str
-    confidence: float = Field(ge=0.0, le=100.0)
+    confidence: float = Field(
+        ge=0.0,
+        le=100.0,
+    )
     language: str
 
 
@@ -152,9 +174,9 @@ class OcrResult(BaseModel):
     raw_text_hash: str
 
 
-# ============================================================================
-# V2 TRANSLATION
-# ============================================================================
+# ---------------------------------------------------------------------------
+# V2 Translation / IndicTrans2
+# ---------------------------------------------------------------------------
 
 class TranslationResult(BaseModel):
     translated_text: str
@@ -166,9 +188,9 @@ class TranslationResult(BaseModel):
     translated_text_hash: str
 
 
-# ============================================================================
-# V2 ENTITY RESOLUTION / SPLINK
-# ============================================================================
+# ---------------------------------------------------------------------------
+# V2 Entity Resolution / Splink
+# ---------------------------------------------------------------------------
 
 class FieldScore(BaseModel):
     field_name: str
@@ -198,9 +220,9 @@ class ResolutionResult(BaseModel):
     total_comparisons: int = 0
 
 
-# ============================================================================
-# V2 RELATIONSHIP EXTRACTION
-# ============================================================================
+# ---------------------------------------------------------------------------
+# V2 Relationship extraction
+# ---------------------------------------------------------------------------
 
 class LlmRelation(BaseModel):
     source: str
@@ -221,9 +243,9 @@ class RelationshipResult(BaseModel):
     )
 
 
-# ============================================================================
-# V2 COMPLETE PIPELINE
-# ============================================================================
+# ---------------------------------------------------------------------------
+# V2 Complete forensic pipeline
+# ---------------------------------------------------------------------------
 
 class PipelineStageTiming(BaseModel):
     stage: str
@@ -247,6 +269,7 @@ class PipelineResult(BaseModel):
     ingestion_hash: str
     pipeline_version: str
 
+    # Timeline
     timeline_state: TimelineState = TimelineState.RECORDED
 
     # Performance
@@ -264,9 +287,9 @@ class ProcessDocumentRequest(BaseModel):
     document_type: str = "FIR"
 
 
-# ============================================================================
-# V2 FORENSIC PIPELINE API RESPONSE
-# ============================================================================
+# ---------------------------------------------------------------------------
+# V2 Forensic pipeline API response
+# ---------------------------------------------------------------------------
 
 class OCREntity(BaseModel):
     """Entity extracted by spaCy with source span."""
@@ -316,11 +339,9 @@ class PipelineResponse(BaseModel):
     stage_errors: list[str] = Field(default_factory=list)
 
 
-# ============================================================================
-# PROVENANCE RESPONSE
-#
-# ONE class only — merged version of the two conflicting definitions.
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
 
 class ProvenanceResponse(BaseModel):
     """Court-ready provenance chain for a document."""
@@ -361,32 +382,26 @@ class ProvenanceResponse(BaseModel):
     translated_text_available: bool = False
 
 
-# ============================================================================
-# CROSS-REFERENCE
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Cross-reference
+# ---------------------------------------------------------------------------
 
 class CrossReferenceMatch(BaseModel):
     case_id: str
     case_number: str = ""
     score: float
-
-    matched_entities: list[str] = Field(
-        default_factory=list
-    )
-
+    matched_entities: list[str] = Field(default_factory=list)
     matched_reason: str = ""
 
 
 class CrossReferenceResponse(BaseModel):
     case_id: str
-    matches: list[CrossReferenceMatch] = Field(
-        default_factory=list
-    )
+    matches: list[CrossReferenceMatch] = Field(default_factory=list)
 
 
-# ============================================================================
-# MO FINGERPRINT
-# ============================================================================
+# ---------------------------------------------------------------------------
+# MO fingerprint
+# ---------------------------------------------------------------------------
 
 class MOFeatures(BaseModel):
     entry_method: str = ""
@@ -406,186 +421,190 @@ class SimilarCase(BaseModel):
         le=100.0,
     )
 
-    matched_features: list[str] = Field(
-        default_factory=list
-    )
+    matched_features: list[str] = Field(default_factory=list)
 
 
 class MOFingerprintResponse(BaseModel):
     case_id: str
     features: MOFeatures
-
-    similar_cases: list[SimilarCase] = Field(
-        default_factory=list
-    )
+    similar_cases: list[SimilarCase] = Field(default_factory=list)
 
 
-# ============================================================================
-# GRAPH ANALYSIS
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Graph analysis
+#
+# These are API/data contracts. They do not imply that NetworkX is used
+# internally. The graph implementation can be Neo4j while these schemas
+# remain the response/request contracts for the AI service.
+# ---------------------------------------------------------------------------
 
 class GraphNode(BaseModel):
     id: str
     label: str
-    entity_type: str = "PERSON"
-
+    entity_type: EntityType
     kingpin_score: float = 0.0
     role: GraphRole = GraphRole.EXECUTOR
-
-    centrality: dict[str, float] = Field(
-        default_factory=dict
-    )
+    centrality: dict[str, float] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphEdge(BaseModel):
     source: str
     target: str
-
     relation: RelationType
     weight: float = 1.0
     evidence: str = ""
+    short_explanation: str = ""
+    elaboration: str = ""
+    timestamps: list[datetime] = Field(default_factory=list)
 
 
 class NetworkGraph(BaseModel):
     case_id: str
-
-    nodes: list[GraphNode] = Field(
-        default_factory=list
-    )
-
-    edges: list[GraphEdge] = Field(
-        default_factory=list
-    )
-
-    metrics: dict[str, Any] = Field(
-        default_factory=dict
-    )
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class KingpinScoreRow(BaseModel):
     entity_id: str
     label: str
-
     pagerank: float = 0.0
     betweenness: float = 0.0
     degree: float = 0.0
     eigenvector: float = 0.0
-
     composite: float = 0.0
-
     role: GraphRole = GraphRole.EXECUTOR
 
 
-# ============================================================================
-# GHOST LINK / LINK PREDICTION
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Link prediction
+# ---------------------------------------------------------------------------
 
 class LinkPrediction(BaseModel):
     source: str
     target: str
-
-    score: float
-
-    algorithm: str = ""
-
+    source_label: str = ""
+    target_label: str = ""
+    score: float = Field(
+        ge=0.0,
+        le=1.0,
+    )
+    algorithm: str
     rationale: str = ""
 
 
 class LinkPredictionResponse(BaseModel):
     case_id: str
-
-    predictions: list[LinkPrediction] = Field(
-        default_factory=list
-    )
-
+    predictions: list[LinkPrediction] = Field(default_factory=list)
     threshold: float = 0.15
 
 
-# ============================================================================
-# CLUSTERING
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Clustering
+# ---------------------------------------------------------------------------
 
 class ClusterResult(BaseModel):
     suspect: str
-    cluster: int
-
+    cluster: int = Field(
+        ge=-1,
+        description="-1 == noise/outlier (DBSCAN)",
+    )
     silhouette: float = 0.0
 
 
-# ============================================================================
-# FINANCIAL
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Financial / anomaly analysis
+# ---------------------------------------------------------------------------
+
+class TransactionFeature(BaseModel):
+    from_account: str
+    to_account: str
+    amount: float
+    timestamp: datetime
+    txn_type: str = ""
+
 
 class TransactionsBody(BaseModel):
-    transactions: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
-
+    transactions: list[dict[str, Any]] = Field(default_factory=list)
     source_account: str = ""
     target_account: str = ""
+
+
+class AnomalyResult(BaseModel):
+    transaction_index: int
+    score: float
+    is_anomaly: bool
+    reason: str = ""
+
+
+class TraceRequest(BaseModel):
+    case_id: str | None = None
+    source_account: str
+    target_account: str
+    max_depth: int = 6
+    transactions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TraceResult(BaseModel):
     path: list[str] = Field(default_factory=list)
     hops: int = 0
-    amount: float = 0.0
-    risk: str = "LOW"
+    found: bool = False
+    layering_risk: str = "LOW"
 
 
-# ============================================================================
-# VISION
-# ============================================================================
+class LaunderingRisk(BaseModel):
+    case_id: str
+    risk_level: str
+    layered_paths: int
+    max_layering_hops: int
+    flagged_transactions: list[AnomalyResult] = Field(
+        default_factory=list
+    )
+
+
+# ---------------------------------------------------------------------------
+# Vision
+# ---------------------------------------------------------------------------
 
 class VisionMatch(BaseModel):
     suspect_id: str
     name: str
-
     confidence: float = Field(
         ge=0.0,
         le=1.0,
     )
-
     notes: str = ""
 
 
 class VisionMatchResponse(BaseModel):
     probe_image: str
-
-    matches: list[VisionMatch] = Field(
-        default_factory=list
-    )
-
+    matches: list[VisionMatch] = Field(default_factory=list)
     model: str = "gemini-1.5-flash"
 
 
-# ============================================================================
-# DOSSIER
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Dossier
+# ---------------------------------------------------------------------------
 
 class DossierSection(BaseModel):
     title: str
     content: str = ""
-
-    charts: list[str] = Field(
-        default_factory=list
-    )
+    charts: list[str] = Field(default_factory=list)
 
 
 class DossierResponse(BaseModel):
     case_id: str
-
     s3_url: str = ""
     local_path: str = ""
-
     page_count: int = 0
     sha256_hash: str = ""
-
     generated_at: datetime
 
 
-# ============================================================================
-# AGENTIC / LANGGRAPH
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Agentic / LangGraph
+# ---------------------------------------------------------------------------
 
 class AgentEvent(BaseModel):
     type: Literal[
@@ -600,18 +619,16 @@ class AgentEvent(BaseModel):
     node: str = ""
     message: str = ""
 
-    data: dict[str, Any] = Field(
-        default_factory=dict
-    )
+    data: dict[str, Any] = Field(default_factory=dict)
 
     timestamp: datetime = Field(
         default_factory=datetime.utcnow
     )
 
 
-# ============================================================================
-# INVESTIGATOR CHATBOT
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Investigator chatbot
+# ---------------------------------------------------------------------------
 
 class ChatIntent(str, Enum):
     FACTUAL_CASE = "factual_case"
@@ -634,41 +651,23 @@ class ChatContextBundle(BaseModel):
     jurisdiction: str = ""
     description: str = ""
 
-    fir_texts: list[str] = Field(
-        default_factory=list
-    )
+    fir_texts: list[str] = Field(default_factory=list)
 
-    entities: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    entities: list[dict[str, Any]] = Field(default_factory=list)
 
-    suspects: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    suspects: list[dict[str, Any]] = Field(default_factory=list)
 
-    nodes: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
 
-    edges: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    edges: list[dict[str, Any]] = Field(default_factory=list)
 
-    transactions: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    transactions: list[dict[str, Any]] = Field(default_factory=list)
 
-    call_records: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    call_records: list[dict[str, Any]] = Field(default_factory=list)
 
-    evidence: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
 
-    alerts: list[dict[str, Any]] = Field(
-        default_factory=list
-    )
+    alerts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatMessageIn(BaseModel):
@@ -724,9 +723,9 @@ class ChatStreamEvent(BaseModel):
     )
 
 
-# ============================================================================
-# INTEGRITY / TAMPER CHECK
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Integrity / tamper check
+# ---------------------------------------------------------------------------
 
 class IntegrityCheckResponse(BaseModel):
     """Result of tamper verification."""
@@ -739,34 +738,3 @@ class IntegrityCheckResponse(BaseModel):
     )
 
     error: Optional[str] = None
-
-class ClusterResult(BaseModel):
-    suspect: str
-    cluster: int
-
-
-class AnomalyResult(BaseModel):
-    transaction_index: int
-    score: float
-    is_anomaly: bool
-    reason: str = ""
-
-class TraceRequest(BaseModel):
-    source_account: str
-    target_account: str
-    transactions: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class TraceResult(BaseModel):
-    path: list[str] = Field(default_factory=list)
-    hops: int = 0
-    found: bool = False
-    layering_risk: str = "LOW"
-
-
-class LaunderingRisk(BaseModel):
-    case_id: str
-    risk_level: str
-    layered_paths: int
-    max_layering_hops: int
-    flagged_transactions: list[dict[str, Any]] = Field(default_factory=list)

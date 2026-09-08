@@ -3,7 +3,6 @@
 # Spins up: PostgreSQL 16, Redis 7, ChromaDB, backend-node, backend-ai, frontend
 # Usage:  docker compose up --build
 # ============================================================================
-version: "3.9"
 
 services:
   # ---------------------------------------------------------------- database
@@ -60,6 +59,24 @@ services:
       timeout: 5s
       retries: 10
 
+  # ------------------------------------------------------------ neo4j graph db
+  neo4j:
+    image: neo4j:5.26.0-community
+    container_name: crimenetx-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # Neo4j HTTP Browser
+      - "7687:7687"   # Bolt protocol
+    environment:
+      NEO4J_AUTH: neo4j/crimenetx_neo4j_pass
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # ------------------------------------------------------- Node REST + WS API
   backend-node:
     build:
@@ -82,7 +99,7 @@ services:
         condition: service_healthy
     volumes:
       - evidence_uploads:/app/uploads
-    command: sh -c "npx prisma migrate deploy && npm run start"
+    command: sh -c "npx prisma migrate deploy && npx prisma db push --accept-data-loss && npm run start"
 
   # --------------------------------------------------------- FastAPI AI/ML API
   backend-ai:
@@ -104,10 +121,15 @@ services:
       REDIS_URL: redis://redis:6379
       NODE_BACKEND_URL: http://backend-node:5000
       CHROMA_PERSIST_DIR: /data/chroma
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: crimenetx_neo4j_pass
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     volumes:
       - chroma_data:/data/chroma
@@ -133,6 +155,7 @@ volumes:
   postgres_data:
   redis_data:
   chroma_data:
+  neo4j_data:
   evidence_uploads:
 
 secrets:

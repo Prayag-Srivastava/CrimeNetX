@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "NetworkEdge" ADD COLUMN IF NOT EXISTS "shortExplanation" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "NetworkEdge" ADD COLUMN IF NOT EXISTS "elaboration" TEXT NOT NULL DEFAULT '';

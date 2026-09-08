@@ -268,14 +268,14 @@ async function main() {
           },
         });
       }
-      const linkPairs: [string, string, RelationType][] = [
-        ["Ravi Jadhav", "Imran Shaikh", "associate"],
-        ["Imran Shaikh", "Sunil More", "phone_call"],
-        ["Imran Shaikh", "Farhan Qureshi", "associate"],
-        ["Ravi Jadhav", "Sunil More", "phone_call"],
-        ["Imran Shaikh", "9822012345", "phone_call"],
+      const linkPairs: [string, string, RelationType, string, string][] = [
+        ["Ravi Jadhav", "Imran Shaikh", "associate", "Key Syndicate Partner", "Primary operational association between Kingpin Ravi Jadhav and Broker Imran Shaikh for handling local distribution."],
+        ["Imran Shaikh", "Sunil More", "phone_call", "14 CDR Calls Exchanged", "Frequent telecommunication exchanges recorded between Imran Shaikh and Sunil More prior to incident."],
+        ["Imran Shaikh", "Farhan Qureshi", "associate", "Co-Broker Relationship", "Joint coordination identified between brokers Imran Shaikh and Farhan Qureshi."],
+        ["Ravi Jadhav", "Sunil More", "phone_call", "Direct Kingpin Command Calls", "Direct encrypted phone communications logged between Kingpin Ravi Jadhav and executor Sunil More."],
+        ["Imran Shaikh", "9822012345", "phone_call", "Registered Phone Line Match", "Imran Shaikh frequently used phone number 9822012345 to coordinate logistics."],
       ];
-      for (const [i, [a, b, rel]] of linkPairs.entries()) {
+      for (const [i, [a, b, rel, short, elab]] of linkPairs.entries()) {
         const sa = nodeIds[a];
         const sb = nodeIds[b];
         if (!sa || !sb) continue;
@@ -286,7 +286,9 @@ async function main() {
             targetId: sb,
             relationType: rel,
             weight: 1,
-            evidence: "seeded from mock FIR",
+            evidence: "Seeded from FIR statement",
+            shortExplanation: short,
+            elaboration: elab,
             createdAt: new Date(caseStart.getTime() + (i + 2) * 6 * 3600 * 1000),
           },
         });

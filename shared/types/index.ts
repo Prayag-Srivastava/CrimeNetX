@@ -69,6 +69,8 @@ export interface NetworkEdge {
   relationType: RelationType;
   weight: number;
   evidence: string;
+  shortExplanation?: string;
+  elaboration?: string;
   createdAt: string;
 }
 
