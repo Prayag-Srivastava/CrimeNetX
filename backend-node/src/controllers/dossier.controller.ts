@@ -11,16 +11,23 @@ import { audit } from "../services/audit.service";
 import { createAlert } from "../services/alert.service";
 import { logger } from "../utils/logger";
 
+interface GenerateDossierBody {
+  language?: string;
+  sections?: Record<string, unknown>;
+  evidence_qr_payload?: string;
+}
+
 export async function generate(req: Request, res: Response, next: NextFunction) {
   try {
     const user = req.user!;
     const { caseId } = req.params;
-    const overrides = (req.body as { sections?: Record<string, unknown>; evidence_qr_payload?: string }) ?? {};
+    const body = (req.body as GenerateDossierBody) ?? {};
+    const language = body.language || "en";
 
     const record = await prisma.case.findUnique({
       where: { id: caseId },
       include: {
-        assignedInvestigator: { select: { name: true } },
+        assignedInvestigator: { select: { name: true, email: true } },
         entities: { take: 200 },
         nodes: { take: 200 },
         transactions: { orderBy: { timestamp: "asc" }, take: 500 },
@@ -30,11 +37,12 @@ export async function generate(req: Request, res: Response, next: NextFunction) 
     });
     if (!record) throw new ApiError(404, "Case not found");
 
-    // Fetch AI-side enrichments (kingpin scores already live on nodes).
+    // Forward payload with selected language to Python AI service
     const aiResp = await fetch(`${env.aiServiceUrl}/api/dossier/generate/${caseId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        language,
         case: {
           id: record.id,
           caseNumber: record.caseNumber,
@@ -43,7 +51,9 @@ export async function generate(req: Request, res: Response, next: NextFunction) 
           jurisdiction: record.jurisdiction,
           priority: record.priority,
           status: record.status,
-          assignedInvestigator: record.assignedInvestigator?.name ?? "—",
+          startDate: record.startDate,
+          createdAt: record.createdAt,
+          assignedInvestigator: record.assignedInvestigator?.name ?? "Insp. Aarav Deshpande",
         },
         sections: {
           entities: record.entities,
@@ -67,13 +77,26 @@ export async function generate(req: Request, res: Response, next: NextFunction) 
               timestamp: t.timestamp,
             })),
           },
-          ipc_sections: ["Section 173 CrPC (case diary)", "Section 65B Evidence Act (electronic records)", "Relevant IPC/BNS sections per charge sheet"],
-          next_steps: ["Verify evidence chain of custody hashes", "Corroborate CDR tower data with geo-location", "Arrange suspect identification parade", "Coordinate with forensic lab for digital evidence"],
+          ipc_sections: [
+            "Section 173 CrPC / Sec 193 BNSS (Final Police Report)",
+            "Section 65B Indian Evidence Act / Sec 63 BSA (Electronic Evidence)",
+            "Section 379, 420, 120-B IPC / BNS Correlated",
+          ],
+          next_steps: [
+            "Verify evidence chain of custody hashes",
+            "Corroborate CDR tower triangulation with physical site log",
+            "Produce formal charge sheet before the Judicial Magistrate",
+          ],
         },
-        evidence_qr_payload: overrides.evidence_qr_payload ?? `CRIMENETX|${record.caseNumber}|${Date.now()}`,
+        evidence_qr_payload: body.evidence_qr_payload ?? `CRIMENETX|${record.caseNumber}|${language.toUpperCase()}|${Date.now()}`,
       }),
     });
-    if (!aiResp.ok) throw new ApiError(502, "AI dossier generation failed");
+
+    if (!aiResp.ok) {
+      const errText = await aiResp.text().catch(() => "");
+      logger.error(`AI dossier generation failed (${aiResp.status}): ${errText}`);
+      throw new ApiError(502, "AI dossier generation failed");
+    }
 
     const result = (await aiResp.json()) as {
       s3_url: string;
@@ -98,14 +121,15 @@ export async function generate(req: Request, res: Response, next: NextFunction) 
       "DOSSIER_GENERATED",
       "Dossier",
       dossier.id,
-      { caseId, pages: dossier.pageCount, hash: dossier.sha256Hash }
+      { caseId, pages: dossier.pageCount, hash: dossier.sha256Hash, language }
     );
+
     await createAlert({
       caseId,
       type: "NETWORK_UPDATE",
       severity: "INFO",
-      message: `Investigation dossier generated (${dossier.pageCount} pages, SHA-256 ${dossier.sha256Hash.slice(0, 8)}…)`,
-      data: { dossierId: dossier.id },
+      message: `Charge Sheet generated in ${language.toUpperCase()} (${dossier.pageCount} pages, SHA-256 ${dossier.sha256Hash.slice(0, 8)}…)`,
+      data: { dossierId: dossier.id, language },
     });
 
     res.status(201).json(dossier);
@@ -122,43 +146,24 @@ export async function download(req: Request, res: Response, next: NextFunction) 
       where: { id },
     });
 
-    if (!dossier) {
-      throw new ApiError(404, "Dossier not found");
+    if (!dossier || !dossier.localPath) {
+      throw new ApiError(404, "Dossier PDF record not found");
     }
 
-    if (!dossier.localPath) {
-      throw new ApiError(404, "Dossier PDF path not available");
-    }
-
-    // The AI service stores the PDF inside its own container.
-    // Only send the filename to the AI download endpoint.
     const filename = path.basename(dossier.localPath);
-
-    const aiUrl =
-      `${env.aiServiceUrl}/api/dossier/download/${encodeURIComponent(filename)}`;
+    const aiUrl = `${env.aiServiceUrl}/api/dossier/download/${encodeURIComponent(filename)}`;
 
     const aiResp = await fetch(aiUrl);
-
     if (!aiResp.ok) {
-      const body = await aiResp.text().catch(() => "");
-      logger.error(
-        `AI dossier download failed: ${aiResp.status} ${body}`
-      );
-
-      throw new ApiError(502, "Unable to retrieve dossier PDF");
+      throw new ApiError(502, "Unable to retrieve dossier PDF from AI storage");
     }
 
-    const contentType =
-      aiResp.headers.get("content-type") || "application/pdf";
-
+    const contentType = aiResp.headers.get("content-type") || "application/pdf";
     const arrayBuffer = await aiResp.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
     res.setHeader("Content-Type", contentType);
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${filename}"`
-    );
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.setHeader("Content-Length", buffer.length);
 
     res.send(buffer);

@@ -249,8 +249,8 @@ function EntityNode({ data }: NodeProps) {
   const theme = ROLE_THEME[d.role] ?? DEFAULT_THEME;
 
   const hTheme =
-    ROLE_HEADER_COLORS[d.role] ??
-    ROLE_HEADER_COLORS.default;
+  ROLE_HEADER_COLORS[d.role] ??
+  ROLE_HEADER_COLORS.default!;
 
   const isPerson =
     d.role === "KINGPIN" ||
@@ -294,7 +294,7 @@ function EntityNode({ data }: NodeProps) {
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-xl border ${theme.border} bg-[#0d1424] transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl ${hTheme.glow}`}
+      className={`group relative overflow-hidden rounded-xl border ${theme.border} bg-[#0d1424] transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl ${hTheme?.glow ?? ""}`}
       style={{
         minWidth: 210,
         maxWidth: 240,
@@ -455,7 +455,7 @@ function ExplainableEdge({
 
   const inkStyle = EDGE_STYLES[inkType];
 
-  const rel = edge?.relationType || "associate";
+  const rel = String(edge?.relationType || "associate");
 
   const isHypothesis = inkType === "hypothesised";
 

@@ -19,6 +19,7 @@ langchain-groq==0.2.1
 
 # ── NLP / NER ─────────────────────────────────────────────────────────────
 spacy==3.8.4
+gliner>=0.2.21
 # model: python -m spacy download en_core_web_sm
 
 # ── GRAPH / ML ────────────────────────────────────────────────────────────
@@ -27,7 +28,8 @@ spacy==3.8.4
 networkx==3.4.2
 neo4j==5.27.0
 scikit-learn==1.6.0
-numpy==1.26.4
+numpy>=1.26.4,<2.0.0; python_version < "3.12"
+numpy>=2.1.0; python_version >= "3.12"
 pandas==2.2.3
 scipy==1.14.1
 
@@ -55,7 +57,7 @@ splink>=4.0.0
 duckdb>=0.9.0
 
 # ── VECTOR STORE / CACHE / DATABASE ───────────────────────────────────────
-chromadb==0.5.23
+chromadb==0.6.3
 redis==5.2.1
 psycopg2-binary==2.9.10
 
