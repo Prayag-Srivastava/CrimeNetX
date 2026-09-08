@@ -24,7 +24,7 @@ Pillow>=10.0.0
 
 # ── STAGE 2: TRANSLATION ──
 torch>=2.5.0
-transformers==4.57.1
+transformers==4.53.2
 sentencepiece>=0.1.99
 sacremoses>=0.0.53
 indictranstoolkit

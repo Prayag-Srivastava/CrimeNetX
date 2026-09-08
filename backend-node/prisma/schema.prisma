@@ -143,7 +143,6 @@ model DocumentProvenance {
   id                 String              @id @default(cuid())
   caseId             String
   documentType       DocumentType
-  documentId         String              @unique
   originalFilename   String
   ingestionHash      String
   ingestionTime      DateTime            @default(now())
@@ -167,6 +166,7 @@ model DocumentProvenance {
   eventTime          DateTime?
   recordTime         DateTime?
   timelineState      TimelineState       @default(RECORDED)
+  documentId         String              @unique
   case               Case                @relation(fields: [caseId], references: [id], onDelete: Cascade)
   nodes              NetworkNode[]       @relation("ProvenanceNodes")
 
