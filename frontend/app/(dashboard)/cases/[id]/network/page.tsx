@@ -343,22 +343,21 @@ export default function NetworkPage() {
 
                 {/* Relationship Type Pill & Copy Button */}
                 <div className="flex items-center justify-between gap-2">
-                  <Badge variant="outline" className={`px-3.5 py-1.5 font-extrabold text-xs uppercase tracking-wider shadow-md ${
-                    rel === "financial_transfer" ? "bg-red-950/80 text-red-300 border-red-500/60 ring-1 ring-red-500/30"
-                    : rel === "phone_call" ? "bg-blue-950/80 text-blue-300 border-blue-500/60 ring-1 ring-blue-500/30"
-                    : rel === "co_location" ? "bg-amber-950/80 text-amber-300 border-amber-500/60 ring-1 ring-amber-500/30"
-                    : rel === "same_organization" ? "bg-purple-950/80 text-purple-300 border-purple-500/60 ring-1 ring-purple-500/30"
-                    : rel === "family" ? "bg-emerald-950/80 text-emerald-300 border-emerald-500/60 ring-1 ring-emerald-500/30"
-                    : isHypothesis ? "bg-violet-950/80 text-violet-300 border-violet-400 border-dashed ring-1 ring-violet-500/30"
-                    : "bg-slate-800 text-slate-200 border-slate-700"
-                  }`}>
+                  <Badge variant="outline" className={`px-3.5 py-1.5 font-extrabold text-xs uppercase tracking-wider shadow-md ${rel === "financial_transfer" ? "bg-red-950/80 text-red-300 border-red-500/60 ring-1 ring-red-500/30"
+                      : rel === "phone_call" ? "bg-blue-950/80 text-blue-300 border-blue-500/60 ring-1 ring-blue-500/30"
+                        : rel === "co_location" ? "bg-amber-950/80 text-amber-300 border-amber-500/60 ring-1 ring-amber-500/30"
+                          : rel === "same_organization" ? "bg-purple-950/80 text-purple-300 border-purple-500/60 ring-1 ring-purple-500/30"
+                            : rel === "family" ? "bg-emerald-950/80 text-emerald-300 border-emerald-500/60 ring-1 ring-emerald-500/30"
+                              : isHypothesis ? "bg-violet-950/80 text-violet-300 border-violet-400 border-dashed ring-1 ring-violet-500/30"
+                                : "bg-slate-800 text-slate-200 border-slate-700"
+                    }`}>
                     {rel === "financial_transfer" ? "💸 Illicit Money Transfer"
-                     : rel === "phone_call" ? "📞 CDR Telecommunication Exchange"
-                     : rel === "co_location" ? "📍 Location Co-Presence"
-                     : rel === "same_organization" ? "🏢 Syndicate Enterprise Affiliation"
-                     : rel === "family" ? "👨‍👩‍👧 Family Connection"
-                     : isHypothesis ? "👻 Covert AI Ghost Link Hypothesis"
-                     : "🤝 Crime Association"}
+                      : rel === "phone_call" ? "📞 CDR Telecommunication Exchange"
+                        : rel === "co_location" ? "📍 Location Co-Presence"
+                          : rel === "same_organization" ? "🏢 Syndicate Enterprise Affiliation"
+                            : rel === "family" ? "👨‍👩‍👧 Family Connection"
+                              : isHypothesis ? "👻 Covert AI Ghost Link Hypothesis"
+                                : "🤝 Crime Association"}
                   </Badge>
                   <Button size="sm" variant="outline" onClick={copyReport} className="h-7 text-xs border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 gap-1.5">
                     📋 Copy Report

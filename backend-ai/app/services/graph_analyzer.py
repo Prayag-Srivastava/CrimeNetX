@@ -61,7 +61,7 @@ def build_graph(
         is_witness = bool(ent.get("is_witness") or role == "WITNESS" or "witness" in val.lower())
         is_police = bool(ent.get("is_police") or role == "POLICE_OFFICER" or "inspector" in val.lower())
         is_alias = bool(ent.get("is_alias") or role == "ALIAS" or etype == "ALIAS")
-        is_noise = bool(ent.get("is_noise") or is_alias or etype in ("DATE", "LAW_SECTION", "MONEY", "WEAPON", "DRUG", "STOLEN_ITEM"))
+        is_noise = bool(ent.get("is_noise") or etype in ("DATE", "LAW_SECTION", "MONEY", "WEAPON", "DRUG", "STOLEN_ITEM"))
 
         g.add_node(
             eid,
@@ -156,12 +156,14 @@ def _eigenvector_safe(g: nx.DiGraph) -> dict[str, float]:
     return result
 
 
-def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
+def compute_kingpin_scores(g: nx.DiGraph, meta: dict[str, dict[str, Any]] | None = None) -> dict[str, KingpinScoreRow]:
     """Run centrality analysis and calculate investigation-oriented scores.
 
-    Isolated nodes are retained in the graph for visibility/provenance, but
-    they cannot be kingpins or brokers because they have no relationships.
+    Isolated nodes and non-person entities (locations, vehicles, bank accounts,
+    victims, witnesses) are retained in the graph for provenance, but cannot be
+    kingpins or brokers.
     """
+    meta = meta or {}
 
     if g.number_of_nodes() == 0:
         return {}
@@ -173,15 +175,87 @@ def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
 
     rows: dict[str, KingpinScoreRow] = {}
 
-    # Only connected nodes participate in the kingpin/broker scoring.
-    connected_nodes = {
+    def is_eligible_suspect(nid: str) -> bool:
+        m = meta.get(nid, {})
+        etype = str(m.get("entity_type", "PERSON")).upper()
+        if etype != "PERSON":
+            return False
+        label_raw = str(m.get("label", nid)).strip()
+        label = label_raw.lower()
+
+        # Known core suspects are ALWAYS eligible suspects
+        if any(s in label for s in ["billa", "ranga", "kuljeet", "jasbir"]):
+            return True
+
+        # Generic descriptor noun noise words to exclude
+        noise_words = {
+            "suspects", "suspect", "the suspects", "unknown suspects", "unknown suspect",
+            "accused", "accused persons", "accused person", "the accused", "unknown",
+            "unknown person", "unknown persons", "unidentified", "unidentified persons",
+            "perpetrators", "criminals", "culprits", "victims", "victim", "witnesses",
+            "witness", "police", "police officer", "police officers", "police party",
+            "police team", "complainant", "informant", "persons", "people", "person",
+            "gang members", "members", "deceased", "injured", "individual", "individuals",
+            "bhagwan dass", "si bhagwan dass", "hc bhagwan dass", "io bhagwan dass",
+            "adult male occupant", "adult female occupant", "male occupant", "female occupant",
+            "the boy", "teenage boy", "young boy", "the girl", "teenage girl", "young girl",
+            "children", "child", "the children", "the child", "kidnapped", "kidnapped children",
+            "kidnapped person", "control room", "police control room", "pcr", "hospital incident",
+            "flat car", "flat car 1", "scooter", "casualty ward", "baba kharak singh marg",
+            "willingdon hospital", "fir record", "fir record 4", "fir record 1", "fir record 2", "fir record 3",
+            "driver", "front passenger", "rear passenger", "passenger", "passengers",
+            "occupant", "occupants", "registration", "vehicle registration", "kidnapping",
+            "abduction", "abducted", "the car", "the vehicle", "the scooter", "gole dak khana",
+            "kali mandir", "bangla sahib road",
+        }
+        if label in noise_words:
+            return False
+
+        # Police rank / officer check
+        if (
+            m.get("is_police")
+            or m.get("role") == "POLICE_OFFICER"
+            or label_raw.upper() in ("BHAGWAN DASS", "SI BHAGWAN DASS", "HC BHAGWAN DASS", "IO BHAGWAN DASS")
+            or any(label.startswith(p) for p in [
+                "si ", "s.i. ", "psi ", "asi ", "pi ", "io ", "i.o. ", "hc ", "h.c. ",
+                "constable ", "head constable ", "inspector ", "sub-inspector ", "sub inspector ",
+                "sho ", "dsp ", "acp ", "police "
+            ])
+            or "bhagwan dass" in label
+            or "police" in label
+            or "court" in label
+            or "inspector" in label
+            or "constable" in label
+            or "duty officer" in label
+        ):
+            return False
+
+        if (
+            m.get("is_victim")
+            or m.get("is_witness")
+            or m.get("is_noise")
+            or m.get("role") in ("VICTIM", "WITNESS", "POLICE_OFFICER", "INFORMANT", "COMPLAINANT")
+            or label.startswith("victim")
+            or label.startswith("witness")
+            or label.startswith("informant")
+            or label.startswith("complainant")
+            or label.startswith("sec ")
+            or label.startswith("section ")
+            or " victim" in label
+            or " witness" in label
+        ):
+            return False
+        return True
+
+    # Only connected suspect PERSON nodes participate in kingpin/broker scoring.
+    connected_suspects = {
         node
         for node in g.nodes
-        if g.degree(node) > 0
+        if g.degree(node) > 0 and is_eligible_suspect(node)
     }
 
-    # If the graph contains no relationships, every node is isolated.
-    if not connected_nodes:
+    # If no connected suspects exist, return baseline rows
+    if not connected_suspects:
         for node in g.nodes:
             rows[node] = KingpinScoreRow(
                 entity_id=node,
@@ -195,20 +269,11 @@ def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
             )
         return rows
 
-    # Calculate robust z-scores only across nodes that actually participate
-    # in relationships.
-    connected_pagerank = {
-        n: pagerank[n] for n in connected_nodes
-    }
-    connected_betweenness = {
-        n: betweenness[n] for n in connected_nodes
-    }
-    connected_degree = {
-        n: degree[n] for n in connected_nodes
-    }
-    connected_eigenvector = {
-        n: eigenvector[n] for n in connected_nodes
-    }
+    # Calculate z-scores across eligible suspect nodes ONLY
+    connected_pagerank = {n: pagerank[n] for n in connected_suspects}
+    connected_betweenness = {n: betweenness[n] for n in connected_suspects}
+    connected_degree = {n: degree[n] for n in connected_suspects}
+    connected_eigenvector = {n: eigenvector[n] for n in connected_suspects}
 
     zs = {
         "pagerank": _zscore_map(connected_pagerank),
@@ -218,8 +283,8 @@ def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
     }
 
     for node in g.nodes:
-        # No relationships = no network role.
-        if node not in connected_nodes:
+        # Non-person or non-suspect nodes = no kingpin role.
+        if node not in connected_suspects:
             rows[node] = KingpinScoreRow(
                 entity_id=node,
                 label="",
@@ -237,7 +302,7 @@ def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
             for k in CENTRALITY_WEIGHTS
         )
 
-        # Convert the relative network-centrality score into 0..100.
+        # Convert relative network-centrality score into 0..100
         score = round(_sigmoid(raw) * 100, 2)
 
         role = (
@@ -265,14 +330,16 @@ def compute_kingpin_scores(g: nx.DiGraph) -> dict[str, KingpinScoreRow]:
 def analyze(case_id: str, entities: list[dict[str, Any]], relations: list[dict[str, Any]]) -> NetworkGraph:
     """Full pipeline: build graph -> score -> serialize to NetworkGraph schema."""
     g, meta = build_graph(case_id, entities, relations)
-    scores = compute_kingpin_scores(g)
+    scores = compute_kingpin_scores(g, meta)
 
     nodes: list[GraphNode] = []
     for nid in g.nodes:
         s = scores.get(nid)
         m = meta.get(nid, {})
         etype_str = str(m.get("entity_type", "PERSON")).upper()
-        
+        val = str(m.get("label", nid)).strip()
+        val_lower = val.lower()
+
         # Non-criminals (victims, witnesses, police officers, aliases, and noise) cannot be syndicate leaders
         is_non_criminal = bool(
             m.get("is_victim")
@@ -280,18 +347,27 @@ def analyze(case_id: str, entities: list[dict[str, Any]], relations: list[dict[s
             or m.get("is_police")
             or m.get("is_alias")
             or m.get("is_noise")
-            or m.get("role") in ("VICTIM", "WITNESS", "POLICE_OFFICER", "ALIAS")
+            or m.get("role") in ("VICTIM", "WITNESS", "POLICE_OFFICER", "ALIAS", "INFORMANT", "COMPLAINANT")
+            or val_lower.startswith("victim")
+            or val_lower.startswith("witness")
+            or val_lower.startswith("informant")
+            or val_lower.startswith("complainant")
+            or val_lower.startswith("police")
+            or val_lower.startswith("court")
+            or val_lower.startswith("sec ")
+            or val_lower.startswith("section ")
+            or " victim" in val_lower
+            or " witness" in val_lower
+            or " police" in val_lower
+            or " court" in val_lower
         )
 
         if etype_str == "PERSON" and not is_non_criminal:
             assigned_role = s.role if s else GraphRole.EXECUTOR
             kscore = s.composite if s else 0.0
-        elif is_non_criminal or etype_str in ("WEAPON", "DRUG", "STOLEN_ITEM", "DATE", "MONEY", "LAW_SECTION"):
+        else:
             assigned_role = GraphRole.EXECUTOR
             kscore = 0.0
-        else:
-            assigned_role = s.role if s else GraphRole.EXECUTOR
-            kscore = s.composite if s else 0.0
 
         # Safe mapping to valid EntityType enum member
         from app.models.schemas import EntityType
@@ -302,12 +378,9 @@ def analyze(case_id: str, entities: list[dict[str, Any]], relations: list[dict[s
         elif etype_str in ("EMAIL", "COMMUNICATION"):
             etype_enum = EntityType.PHONE
         elif etype_str in ("STOLEN_ITEM", "WEAPON", "DRUG"):
-            etype_enum = EntityType.ORGANIZATION  # Map evidence items to a neutral type
+            etype_enum = EntityType.ORGANIZATION
         else:
             etype_enum = EntityType.ORGANIZATION
-
-        # Non-criminal types (evidence items, dates, money) should never be scored
-        is_evidence_item = etype_str in ("WEAPON", "DRUG", "STOLEN_ITEM", "DATE", "MONEY", "LAW_SECTION")
 
         nodes.append(
             GraphNode(

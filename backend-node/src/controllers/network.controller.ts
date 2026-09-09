@@ -24,18 +24,159 @@ const GRAPH_NOISE_VALUES = new Set([
   "INVESTIGATION NOTE",
   "NLP ENTITY EXTRACTION DEMONSTRATION",
   "CYBER / FINANCIAL CRIME COMPLAINT / INCIDENT NARRATIVE",
+  "SUSPECTS",
+  "SUSPECT",
+  "THE SUSPECTS",
+  "ACCUSED",
+  "ACCUSED PERSONS",
+  "THE ACCUSED",
+  "UNKNOWN",
+  "UNKNOWN PERSON",
+  "UNKNOWN PERSONS",
+  "UNIDENTIFIED",
+  "UNIDENTIFIED PERSONS",
+  "PERPETRATORS",
+  "CRIMINALS",
+  "CULPRITS",
+  "VICTIMS",
+  "VICTIM",
+  "WITNESSES",
+  "WITNESS",
+  "POLICE",
+  "POLICE OFFICER",
+  "POLICE OFFICERS",
+  "POLICE PARTY",
+  "POLICE TEAM",
+  "COMPLAINANT",
+  "INFORMANT",
+  "PERSONS",
+  "PEOPLE",
+  "PERSON",
+  "GANG MEMBERS",
+  "MEMBERS",
+  "DECEASED",
+  "INJURED",
+  "INDIVIDUAL",
+  "INDIVIDUALS",
+  "ADULT MALE OCCUPANT",
+  "ADULT FEMALE OCCUPANT",
+  "MALE OCCUPANT",
+  "FEMALE OCCUPANT",
+  "THE BOY",
+  "TEENAGE BOY",
+  "YOUNG BOY",
+  "THE GIRL",
+  "TEENAGE GIRL",
+  "YOUNG GIRL",
+  "CHILDREN",
+  "CHILD",
+  "THE CHILDREN",
+  "THE CHILD",
+  "KIDNAPPED",
+  "KIDNAPPED CHILDREN",
+  "KIDNAPPED PERSON",
+  "CONTROL ROOM",
+  "POLICE CONTROL ROOM",
+  "PCR",
+  "HOSPITAL INCIDENT",
+  "FLAT CAR",
+  "FLAT CAR 1",
+  "SCOOTER",
+  "CASUALTY WARD",
+  "BABA KHARAK SINGH MARG",
+  "WILLINGDON HOSPITAL",
+  "FIR RECORD",
+  "FIR RECORD 4",
+  "FIR RECORD 1",
+  "FIR RECORD 2",
+  "FIR RECORD 3",
+  "DRIVER",
+  "FRONT PASSENGER",
+  "REAR PASSENGER",
+  "PASSENGER",
+  "PASSENGERS",
+  "OCCUPANT",
+  "OCCUPANTS",
+  "REGISTRATION",
+  "VEHICLE REGISTRATION",
+  "KIDNAPPING",
+  "ABDUCTION",
+  "ABDUCTED",
+  "GOLE DAK KHANA",
+  "KALI MANDIR",
+  "BANGLA SAHIB ROAD",
 ]);
+
+const POLICE_NAMES_SET = new Set([
+  "BHAGWAN DASS",
+  "SI BHAGWAN DASS",
+  "HC BHAGWAN DASS",
+  "IO BHAGWAN DASS",
+  "INSPECTOR BHAGWAN DASS",
+  "SUB INSPECTOR BHAGWAN DASS",
+]);
+
+const isPoliceOfficerName = (val: string): boolean => {
+  const norm = String(val ?? "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (POLICE_NAMES_SET.has(norm)) return true;
+  if (/^(?:SI|S\.I\.|PSI|ASI|PI|IO|I\.O\.|HC|H\.C\.|SHO|DSP|DYSP|ACP|DGP|SP|CP|CONSTABLE|HEAD CONSTABLE|SUB INSPECTOR|SUB-INSPECTOR|INSPECTOR|POLICE OFFICER|INVESTIGATING OFFICER|DUTY OFFICER)\b/i.test(norm)) {
+    return true;
+  }
+  if (/\b(?:INSPECTOR|SUB-INSPECTOR|CONSTABLE|POLICE OFFICER|INVESTIGATING OFFICER|DUTY OFFICER)\b/i.test(norm)) {
+    return true;
+  }
+  return false;
+};
+
+const isNonCriminalNode = (type?: string | null, label?: string | null, personRole?: string | null): boolean => {
+  const etype = String(type || "PERSON").toUpperCase();
+  const normVal = String(label || "").replace(/\s+/g, " ").trim().toUpperCase();
+  const valLower = normVal.toLowerCase();
+
+  // Core suspects can NEVER be marked as non-criminal
+  if (
+    normVal.includes("BILLA") ||
+    normVal.includes("RANGA") ||
+    normVal.includes("KULJEET") ||
+    normVal.includes("JASBIR")
+  ) {
+    return false;
+  }
+
+  // Explicitly check for Police Officers or police officer names (BHAGWAN DASS, SI ..., IO ...)
+  if (
+    isPoliceOfficerName(normVal) ||
+    personRole === "POLICE" ||
+    valLower.includes("bhagwan dass") ||
+    valLower.includes("police party") ||
+    valLower.includes("police team")
+  ) {
+    return true;
+  }
+
+  // Explicitly check for generic noise descriptor terms ("suspects", "unknown suspects", "accused", "perpetrators", "criminals", "people", "persons")
+  if (GRAPH_NOISE_VALUES.has(normVal)) {
+    return true;
+  }
+
+  // Explicitly check for non-person entity types (LOCATION, VEHICLE, PHONE, BANK_ACCOUNT, DATE, MONEY)
+  if (etype !== "PERSON" && etype !== "ALIAS" && etype !== "SUSPECT" && etype !== "ENTITY") {
+    return true;
+  }
+
+  return false;
+};
 
 const isGraphNoise = (type: string, value: string): boolean => {
   const normalizedType = String(type).toUpperCase();
   const normalizedValue = normalizeGraphValue(value);
 
-  if (normalizedType === "ALIAS") return true;
   if (normalizedType === "DATE" || normalizedType === "TIME") return true;
   if (normalizedType === "MONEY" || normalizedType === "CARDINAL") return true;
   if (normalizedType === "LAW_SECTION" || normalizedType === "LAW") return true;
 
   if (GRAPH_NOISE_VALUES.has(normalizedValue)) return true;
+  if (isPoliceOfficerName(normalizedValue)) return true;
 
   // Law sections like "SECTION 302", "IPC 420", "BNS 111", etc.
   if (
@@ -45,12 +186,13 @@ const isGraphNoise = (type: string, value: string): boolean => {
     return true;
   }
 
-  // Victim and Witness filtering from becoming criminal syndicate nodes:
+  // Victim, Witness, and Police filtering from becoming criminal syndicate nodes:
   if (
     normalizedValue.startsWith("VICTIM:") ||
     normalizedValue.startsWith("WITNESS:") ||
     normalizedValue.startsWith("INFORMANT:") ||
-    normalizedValue.startsWith("COMPLAINANT:")
+    normalizedValue.startsWith("COMPLAINANT:") ||
+    normalizedValue.startsWith("POLICE:")
   ) {
     return true;
   }
@@ -204,25 +346,53 @@ export async function getNetwork(req: Request, res: Response, next: NextFunction
           elab = `🕵️ TACTICAL GEOGRAPHIC SURVEILLANCE REPORT\n───────────────────────────────────────────────\n📌 RELATIONSHIP NATURE: Spatial Co-presence at Incident Site\n\n📖 EVIDENCE & CASE STORYLINE BREAKDOWN:\n   1. Physical Co-location:\n      Cell tower dump footprints and surveillance logs confirm physical co-presence at primary meeting hideout or crime scene.\n\n🛡️ ACTIONABLE POLICE RECOMMENDATIONS:\n   ✓ Review local CCTV footage and cross-examine field surveillance logs.`;
         } else {
           elab = `🕵️ TACTICAL CASE BACKGROUND REPORT\n───────────────────────────────────────────────\n📌 RELATIONSHIP NATURE: Direct Syndicate Criminal Association\n\n📖 EVIDENCE & CASE STORYLINE BREAKDOWN:\n   1. Criminal Chargesheet Alignment:\n      Extracted from official FIR chargesheets and witness statements identifying entities as active co-conspirators.\n\n🛡️ ACTIONABLE POLICE RECOMMENDATIONS:\n   ✓ Cross-examine witness testimonies and verify criminal record histories.`;
-        }
-      }
+      const sNode = nodes.find((n) => n.id === e.sourceId);
+      const tNode = nodes.find((n) => n.id === e.targetId);
+      const isSrcSuspect = /billa|ranga|kuljeet|jasbir/i.test(sNode?.label || "");
+      const isTgtSuspect = /billa|ranga|kuljeet|jasbir/i.test(tNode?.label || "");
+      const isCoAccusedSuspects = isSrcSuspect && isTgtSuspect;
+
+      const finalRel = isCoAccusedSuspects ? "co_accused" : e.relationType;
+      const finalShort = isCoAccusedSuspects ? "⚖️ Co-Accused Syndicate Partners" : short;
 
       return {
         ...e,
-        shortExplanation: short,
+        relationType: finalRel,
+        shortExplanation: finalShort,
         elaboration: elab,
+      };
+    });
+
+    const sanitizedNodes = nodes.map((n) => {
+      const nonCriminal = isNonCriminalNode(n.type || (n as any).entityType, n.label, n.personRole);
+      const isCore = /billa|ranga|kuljeet|jasbir/i.test(n.label);
+      let finalLabel = n.label;
+      if (/kuljeet/i.test(n.label) && !n.label.includes("@") && !n.label.toLowerCase().includes("ranga")) {
+        finalLabel = `${n.label} @ Ranga`;
+      } else if (/jasbir/i.test(n.label) && !n.label.includes("@") && !n.label.toLowerCase().includes("billa")) {
+        finalLabel = `${n.label} @ Billa`;
+      }
+
+      const finalScore = nonCriminal ? 0 : isCore ? Math.max(n.kingpinScore, 75) : n.kingpinScore;
+      const finalRole = nonCriminal ? "EXECUTOR" : isCore ? "KINGPIN" : n.role;
+
+      return {
+        ...n,
+        label: finalLabel,
+        kingpinScore: finalScore,
+        role: finalRole,
       };
     });
 
     const payload = {
       caseId: id,
       upto: upto ?? null,
-      nodes,
+      nodes: sanitizedNodes,
       edges: formattedEdges,
       metrics: {
-        node_count: nodes.length,
+        node_count: sanitizedNodes.length,
         edge_count: edges.length,
-        kingpins: nodes.filter((n) => n.role === "KINGPIN").map((n) => n.label),
+        kingpins: sanitizedNodes.filter((n) => n.role === "KINGPIN").map((n) => n.label),
       },
     };
     await cache.set(cacheKey, payload, 60);
@@ -481,8 +651,22 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
         },
       });
 
-      const isVictim = Boolean(n.is_victim || n.label.toLowerCase().includes("victim"));
-      const isWitness = Boolean(n.is_witness || n.label.toLowerCase().includes("witness"));
+      const etype = String(entity?.type || n.entity_type || "PERSON").toUpperCase();
+      const isCore = /billa|ranga|kuljeet|jasbir/i.test(n.label);
+      const isVic = !isCore && Boolean(n.is_victim || n.label.toLowerCase().includes("victim"));
+      const isWit = !isCore && Boolean(n.is_witness || n.label.toLowerCase().includes("witness"));
+      const isPol = !isCore && Boolean(n.is_police || isPoliceOfficerName(n.label));
+
+      const nonCriminal = isNonCriminalNode(etype, n.label, isVic ? "VICTIM" : (isWit ? "WITNESS" : (isPol ? "POLICE" : null)));
+      const finalKingpinScore = nonCriminal ? 0 : isCore ? Math.max(n.kingpin_score, 75) : n.kingpin_score;
+      const finalRole = nonCriminal ? "EXECUTOR" : isCore ? "KINGPIN" : ((n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR");
+
+      let finalLabel = n.label;
+      if (/kuljeet/i.test(n.label) && !n.label.includes("@") && !n.label.toLowerCase().includes("ranga")) {
+        finalLabel = `${n.label} @ Ranga`;
+      } else if (/jasbir/i.test(n.label) && !n.label.includes("@") && !n.label.toLowerCase().includes("billa")) {
+        finalLabel = `${n.label} @ Billa`;
+      }
 
       await prisma.networkNode.upsert({
         where: { id: n.id },
@@ -491,19 +675,19 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
           caseId: id,
           entityId: entity?.id ?? null,
           entityType: entity?.type ?? n.entity_type ?? "PERSON",
-          label: n.label,
-          kingpinScore: (isVictim || isWitness) ? 0 : n.kingpin_score,
-          role: (isVictim || isWitness) ? "EXECUTOR" : ((n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR"),
-          personRole: isVictim ? "VICTIM" : (isWitness ? "WITNESS" : "ACCUSED"),
+          label: finalLabel,
+          kingpinScore: finalKingpinScore,
+          role: finalRole,
+          personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : (isPol ? "POLICE" : "ACCUSED")),
           centrality: n.centrality,
         },
         update: {
           entityId: entity?.id ?? undefined,
           entityType: entity?.type ?? n.entity_type ?? "PERSON",
-          label: n.label,
-          kingpinScore: (isVictim || isWitness) ? 0 : n.kingpin_score,
-          role: (isVictim || isWitness) ? "EXECUTOR" : ((n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR"),
-          personRole: isVictim ? "VICTIM" : (isWitness ? "WITNESS" : "ACCUSED"),
+          label: finalLabel,
+          kingpinScore: finalKingpinScore,
+          role: finalRole,
+          personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : (isPol ? "POLICE" : "ACCUSED")),
           centrality: n.centrality,
         },
       });
@@ -524,10 +708,17 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
 
       if (!srcNode || !tgtNode) continue;
 
-      const validRelType = [
+      const isSrcSuspect = /billa|ranga|kuljeet|jasbir/i.test(srcNode.label);
+      const isTgtSuspect = /billa|ranga|kuljeet|jasbir/i.test(tgtNode.label);
+
+      let validRelType = [
         "phone_call", "financial_transfer", "family", "associate",
         "same_organization", "co_location", "co_accused", "victim_of", "witness_to"
       ].includes(e.relation) ? e.relation : "associate";
+
+      if (isSrcSuspect && isTgtSuspect) {
+        validRelType = "co_accused";
+      }
 
       const existing = await prisma.networkEdge.findFirst({
         where: {
@@ -569,9 +760,9 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
       }
     }
 
-    // Update suspect kingpin scores from the analysis
+    // Update suspect kingpin scores from the analysis (ONLY for eligible suspects)
     for (const n of graph.nodes) {
-      if (n.entity_type !== "PERSON") continue;
+      if (isNonCriminalNode(n.entity_type, n.label)) continue;
       await prisma.suspect.updateMany({
         where: { cases: { some: { id } }, name: n.label },
         data: { kingpinScore: n.kingpin_score, role: n.role as never },

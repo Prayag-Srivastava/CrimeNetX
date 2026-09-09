@@ -13,12 +13,12 @@ export const AI_API_URL =
 
 export const api = axios.create({
   baseURL: API_URL,
-  timeout: 60000,
+  timeout: 180000,
 });
 
 export const aiApi = axios.create({
   baseURL: AI_API_URL,
-  timeout: 60000,
+  timeout: 180000,
 });
 
 const TOKEN_KEY = "crimenetx_access_token";

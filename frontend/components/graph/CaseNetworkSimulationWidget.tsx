@@ -90,12 +90,16 @@ export function CaseNetworkSimulationWidget() {
       return { kingpin: null, peripheralNodes: [] };
     }
 
-    // Identify node with role === "KINGPIN" or highest kingpinScore
+    // Identify node with role === "KINGPIN" or highest kingpinScore among suspect person nodes
+    const candidates = network.nodes.filter(
+      (n) => n.type === "PERSON" && n.role !== "POLICE_OFFICER" && n.role !== "VICTIM" && n.role !== "WITNESS"
+    );
+    const pool = candidates.length > 0 ? candidates : network.nodes;
     const kp =
-      network.nodes.find((n) => n.role === "KINGPIN") ??
-      network.nodes.reduce((highest, current) =>
+      pool.find((n) => n.role === "KINGPIN") ??
+      pool.reduce((highest, current) =>
         current.kingpinScore > (highest?.kingpinScore ?? -1) ? current : highest
-      , network.nodes[0]);
+      , pool[0]);
 
     // Position surrounding brokers/executors in a clean radial circle
     const others = network.nodes

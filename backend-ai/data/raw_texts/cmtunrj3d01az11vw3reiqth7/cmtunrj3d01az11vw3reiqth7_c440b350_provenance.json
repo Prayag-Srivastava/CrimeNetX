@@ -1,0 +1,29 @@
+{
+  "document_id": "cmtunrj3d01az11vw3reiqth7_c440b350",
+  "case_id": "cmtunrj3d01az11vw3reiqth7",
+  "original_filename": "tmpni4p2z3k.pdf",
+  "original_file_hash": "8193ca38a0f6c454695531aefaae18c8b44fd100e6d011903732b2e68f5bcfd1",
+  "pipeline_version": "v2.2-ocr-indictrans-gliner-relex-splink",
+  "stages": {
+    "ocr": {
+      "raw_text_hash": "b6480555c733275aba1c8f4ac4f5011924a5120e37ae77de9f3a42fe7c439f05",
+      "language": "eng+hin",
+      "confidence": 95.18,
+      "raw_text_file": "data/raw_texts/cmtunrj3d01az11vw3reiqth7/cmtunrj3d01az11vw3reiqth7_c440b350_raw.txt"
+    },
+    "translation": {
+      "translated_text_hash": "b6480555c733275aba1c8f4ac4f5011924a5120e37ae77de9f3a42fe7c439f05",
+      "source_language": "en",
+      "model": "identity",
+      "translated_text_file": "data/raw_texts/cmtunrj3d01az11vw3reiqth7/cmtunrj3d01az11vw3reiqth7_c440b350_translated.txt"
+    }
+  },
+  "hash_chain": {
+    "step_1_original_file": "8193ca38a0f6c454695531aefaae18c8b44fd100e6d011903732b2e68f5bcfd1",
+    "step_2_ocr_text": "b6480555c733275aba1c8f4ac4f5011924a5120e37ae77de9f3a42fe7c439f05",
+    "step_3_translated_text": "b6480555c733275aba1c8f4ac4f5011924a5120e37ae77de9f3a42fe7c439f05"
+  },
+  "timestamps": {
+    "ingested_at": "2026-09-09T22:17:03.818562+00:00"
+  }
+}

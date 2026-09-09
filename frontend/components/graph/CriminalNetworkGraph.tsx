@@ -249,43 +249,49 @@ function EntityNode({ data }: NodeProps) {
   const theme = ROLE_THEME[d.role] ?? DEFAULT_THEME;
 
   const hTheme =
-  ROLE_HEADER_COLORS[d.role] ??
-  ROLE_HEADER_COLORS.default!;
+    ROLE_HEADER_COLORS[d.role] ??
+    ROLE_HEADER_COLORS.default!;
 
-  const isPerson =
-    d.role === "KINGPIN" ||
-    d.role === "BROKER" ||
-    d.role === "EXECUTOR";
+  const etype = String(d.node?.entityType || "").toUpperCase();
+  const labelLower = d.label.toLowerCase();
+  const isVictim = labelLower.includes("victim") || (d.node as any)?.personRole === "VICTIM";
+  const isWitness = labelLower.includes("witness") || (d.node as any)?.personRole === "WITNESS";
+  const isNonCriminal = isVictim || isWitness || labelLower.includes("informant") || labelLower.includes("complainant") || labelLower.includes("police") || labelLower.includes("court") || labelLower.startsWith("sec ") || labelLower.startsWith("section ");
+  const isSuspectPerson = (etype === "PERSON" || !etype) && !isNonCriminal && (d.role === "KINGPIN" || d.role === "BROKER" || d.role === "EXECUTOR");
 
   const icon =
-    d.role === "KINGPIN"
-      ? "👑"
-      : d.role === "BROKER"
-        ? "💼"
-        : d.role === "EXECUTOR"
-          ? "⚡"
-          : d.label.startsWith("98") ||
-              d.label.startsWith("97") ||
-              d.label.startsWith("99")
-            ? "📱"
-            : d.label.includes("MH-")
-              ? "🚗"
-              : d.label.includes("Police") ||
-                  d.label.includes("Pune") ||
-                  d.label.includes("Nashik")
-                ? "📍"
-                : d.label.match(/^\d{10,}$/)
-                  ? "🏦"
-                  : "🏷️";
+    isVictim
+      ? "🛡️"
+      : isWitness
+        ? "⚖️"
+        : d.role === "KINGPIN"
+          ? "👑"
+          : d.role === "BROKER"
+            ? "💼"
+            : etype === "LOCATION" || d.label.includes("Pune") || d.label.includes("Nashik") || d.label.includes("Police")
+              ? "📍"
+              : etype === "VEHICLE" || d.label.includes("MH-")
+                ? "🚗"
+                : etype === "PHONE" || d.label.startsWith("98") || d.label.startsWith("97") || d.label.startsWith("99")
+                  ? "📱"
+                  : etype === "BANK_ACCOUNT" || d.label.match(/^\d{10,}$/)
+                    ? "🏦"
+                    : etype === "ORGANIZATION"
+                      ? "🏢"
+                      : "🏷️";
 
   const roleLabel =
-    d.role === "KINGPIN"
-      ? "Command — Mastermind"
-      : d.role === "BROKER"
-        ? "Key Operative"
-        : d.role === "EXECUTOR"
-          ? "Field Executor"
-          : d.role || "Entity";
+    isVictim
+      ? "Victim"
+      : isWitness
+        ? "Witness"
+        : d.role === "KINGPIN"
+          ? "Command — Mastermind"
+          : d.role === "BROKER"
+            ? "Key Operative"
+            : etype === "PERSON"
+              ? "Field Executor"
+              : etype || "Entity";
 
   const scorePercent = Math.min(
     100,
@@ -310,9 +316,12 @@ function EntityNode({ data }: NodeProps) {
 
         <span
           className="truncate text-[13px] font-black tracking-tight text-white"
-          style={{ maxWidth: 160 }}
+          style={{ maxWidth: 170 }}
+          title={d.node?.aliases?.length ? `${d.label} (aka ${d.node.aliases.join(", ")})` : d.label}
         >
-          {d.label}
+          {d.node?.aliases?.length && !d.label.toLowerCase().includes(d.node.aliases[0].toLowerCase())
+            ? `${d.label} @ ${d.node.aliases[0]}`
+            : d.label}
         </span>
       </div>
 
@@ -385,7 +394,7 @@ function EntityNode({ data }: NodeProps) {
           </span>
         </div>
 
-        {isPerson && (
+        {isSuspectPerson && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[10px]">
               <span className="font-semibold text-slate-500">
@@ -393,13 +402,12 @@ function EntityNode({ data }: NodeProps) {
               </span>
 
               <span
-                className={`font-black ${
-                  scorePercent >= 60
+                className={`font-black ${scorePercent >= 60
                     ? "text-red-400"
                     : scorePercent >= 35
                       ? "text-amber-400"
                       : "text-emerald-400"
-                }`}
+                  }`}
               >
                 {scorePercent}
               </span>
@@ -542,20 +550,20 @@ function ExplainableEdge({
 
     const t =
       tValues[
-        staggerIndex %
-          tValues.length
+      staggerIndex %
+      tValues.length
       ] ?? 0.5;
 
     const offsetMagnitude =
       staggerIndex === 0
         ? 0
         : (staggerIndex % 2 === 1
-            ? 1
-            : -1) *
-          Math.ceil(
-            staggerIndex / 2
-          ) *
-          75;
+          ? 1
+          : -1) *
+        Math.ceil(
+          staggerIndex / 2
+        ) *
+        75;
 
     labelX =
       sourceX +
@@ -643,10 +651,10 @@ function ExplainableEdge({
 
                 const callback =
                   data?.onEdgeClick as
-                    | ((
-                        edge: NetworkEdge
-                      ) => void)
-                    | undefined;
+                  | ((
+                    edge: NetworkEdge
+                  ) => void)
+                  | undefined;
 
                 if (callback && edge) {
                   callback(edge);
@@ -936,7 +944,7 @@ export function CriminalNetworkGraph({
           700 -
           ((count - 1) *
             spacingX) /
-            2;
+          2;
 
         return itemList.map(
           (item, index) => {
@@ -951,7 +959,7 @@ export function CriminalNetworkGraph({
                 x:
                   startX +
                   index *
-                    spacingX,
+                  spacingX,
                 y:
                   baseGroupY +
                   yOffset,
@@ -965,23 +973,23 @@ export function CriminalNetworkGraph({
         string,
         XYPosition
       ][] = [
-        ...computePositions(
-          kingpins,
-          80
-        ),
-        ...computePositions(
-          brokers,
-          400
-        ),
-        ...computePositions(
-          executors,
-          760
-        ),
-        ...computePositions(
-          others,
-          1120
-        ),
-      ];
+          ...computePositions(
+            kingpins,
+            80
+          ),
+          ...computePositions(
+            brokers,
+            400
+          ),
+          ...computePositions(
+            executors,
+            760
+          ),
+          ...computePositions(
+            others,
+            1120
+          ),
+        ];
 
       const map =
         new Map<
@@ -997,7 +1005,7 @@ export function CriminalNetworkGraph({
                 x:
                   140 +
                   (index % 4) *
-                    460,
+                  460,
                 y:
                   120 +
                   Math.floor(
@@ -1218,7 +1226,7 @@ export function CriminalNetworkGraph({
             animated:
               isFinancial ||
               inkType ===
-                "hypothesised",
+              "hypothesised",
 
             markerEnd: {
               type: MarkerType.ArrowClosed,
@@ -1243,9 +1251,9 @@ export function CriminalNetworkGraph({
               ...(inkType ===
                 "hypothesised"
                 ? {
-                    filter:
-                      "drop-shadow(0 0 5px rgba(234,88,12,0.65))",
-                  }
+                  filter:
+                    "drop-shadow(0 0 5px rgba(234,88,12,0.65))",
+                }
                 : {}),
             },
           };
@@ -1291,11 +1299,10 @@ export function CriminalNetworkGraph({
   return (
     <div
       ref={containerRef}
-      className={`relative w-full overflow-hidden bg-[#060b14] shadow-2xl transition-all duration-300 ${
-        isFullscreen
+      className={`relative w-full overflow-hidden bg-[#060b14] shadow-2xl transition-all duration-300 ${isFullscreen
           ? "fixed inset-0 z-[9999] h-screen w-screen"
           : "h-[920px] min-h-[88vh] rounded-2xl border border-slate-800/60"
-      }`}
+        }`}
     >
       {/* ------------------------------------------------------------------ */}
       {/* FULLSCREEN */}
@@ -1575,18 +1582,16 @@ export function CriminalNetworkGraph({
               {/* Direct */}
               <label className="group flex cursor-pointer items-center gap-2">
                 <div
-                  className={`relative flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${
-                    showDirectLinks
+                  className={`relative flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${showDirectLinks
                       ? "bg-indigo-500"
                       : "bg-slate-700"
-                  }`}
+                    }`}
                 >
                   <div
-                    className={`absolute left-1 h-3 w-3 rounded-full bg-white transition-transform duration-200 ${
-                      showDirectLinks
+                    className={`absolute left-1 h-3 w-3 rounded-full bg-white transition-transform duration-200 ${showDirectLinks
                         ? "translate-x-4"
                         : "translate-x-0"
-                    }`}
+                      }`}
                   />
                 </div>
 
@@ -1605,11 +1610,10 @@ export function CriminalNetworkGraph({
                 />
 
                 <span
-                  className={`text-xs font-bold transition-colors ${
-                    showDirectLinks
+                  className={`text-xs font-bold transition-colors ${showDirectLinks
                       ? "text-slate-200"
                       : "text-slate-500 group-hover:text-slate-400"
-                  }`}
+                    }`}
                 >
                   Observed / Predicted Links
                 </span>
@@ -1618,18 +1622,16 @@ export function CriminalNetworkGraph({
               {/* Hypothesised */}
               <label className="group flex cursor-pointer items-center gap-2">
                 <div
-                  className={`relative flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${
-                    showGhostLinks
+                  className={`relative flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${showGhostLinks
                       ? "bg-orange-500 shadow-[0_0_8px_rgba(234,88,12,0.6)]"
                       : "bg-slate-700"
-                  }`}
+                    }`}
                 >
                   <div
-                    className={`absolute left-1 h-3 w-3 rounded-full bg-white transition-transform duration-200 ${
-                      showGhostLinks
+                    className={`absolute left-1 h-3 w-3 rounded-full bg-white transition-transform duration-200 ${showGhostLinks
                         ? "translate-x-4"
                         : "translate-x-0"
-                    }`}
+                      }`}
                   />
                 </div>
 
@@ -1648,11 +1650,10 @@ export function CriminalNetworkGraph({
                 />
 
                 <span
-                  className={`text-xs font-bold transition-colors ${
-                    showGhostLinks
+                  className={`text-xs font-bold transition-colors ${showGhostLinks
                       ? "text-orange-300"
                       : "text-slate-500 group-hover:text-slate-400"
-                  }`}
+                    }`}
                 >
                   Hypothesised Ghost Links
                 </span>
@@ -1704,7 +1705,7 @@ export function CriminalNetworkGraph({
               : role === "BROKER"
                 ? "#f59e0b"
                 : role ===
-                    "EXECUTOR"
+                  "EXECUTOR"
                   ? "#10b981"
                   : "#6366f1";
           }}
@@ -1748,7 +1749,7 @@ export function CriminalNetworkGraph({
                   AI Confidence:{" "}
                   {Math.round(
                     internalSelectedEdge.weight *
-                      100
+                    100
                   )}
                   %
                 </Badge>
@@ -1791,7 +1792,7 @@ export function CriminalNetworkGraph({
 
               const inkStyle =
                 EDGE_STYLES[
-                  inkType
+                inkType
                 ];
 
               const evidence =

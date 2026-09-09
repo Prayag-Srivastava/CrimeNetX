@@ -1,0 +1,29 @@
+{
+  "document_id": "cmtuls470004n11vwme42rca9_d3362e28",
+  "case_id": "cmtuls470004n11vwme42rca9",
+  "original_filename": "tmpblonpkfc.pdf",
+  "original_file_hash": "07db574c066374f94a95b12d11ae17ac18954c6432b75418d617b74b04a780cb",
+  "pipeline_version": "v2.2-ocr-indictrans-gliner-relex-splink",
+  "stages": {
+    "ocr": {
+      "raw_text_hash": "0a99766949e6e285a995c8d509dcf4d029c5624b68a6c51866b16c49c4c3190a",
+      "language": "eng+hin",
+      "confidence": 92.87,
+      "raw_text_file": "data/raw_texts/cmtuls470004n11vwme42rca9/cmtuls470004n11vwme42rca9_d3362e28_raw.txt"
+    },
+    "translation": {
+      "translated_text_hash": "0a99766949e6e285a995c8d509dcf4d029c5624b68a6c51866b16c49c4c3190a",
+      "source_language": "en",
+      "model": "identity",
+      "translated_text_file": "data/raw_texts/cmtuls470004n11vwme42rca9/cmtuls470004n11vwme42rca9_d3362e28_translated.txt"
+    }
+  },
+  "hash_chain": {
+    "step_1_original_file": "07db574c066374f94a95b12d11ae17ac18954c6432b75418d617b74b04a780cb",
+    "step_2_ocr_text": "0a99766949e6e285a995c8d509dcf4d029c5624b68a6c51866b16c49c4c3190a",
+    "step_3_translated_text": "0a99766949e6e285a995c8d509dcf4d029c5624b68a6c51866b16c49c4c3190a"
+  },
+  "timestamps": {
+    "ingested_at": "2026-09-09T21:21:32.992554+00:00"
+  }
+}

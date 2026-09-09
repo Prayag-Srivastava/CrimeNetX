@@ -428,64 +428,100 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
     }
 
     // -----------------------------------------------------------------------
-    // 3. Trigger Graph ML rebuild (optional — safe if AI service unavailable)
+    // 3. Trigger Graph ML rebuild asynchronously (background task)
     // -----------------------------------------------------------------------
-    try {
-      const allEntities = await prisma.entity.findMany({
-        where: { caseId },
-        select: { id: true, type: true, value: true, confidence: true, layer: true },
-      });
+    void (async () => {
+      try {
+        const allEntities = await prisma.entity.findMany({
+          where: { caseId },
+          select: { id: true, type: true, value: true, confidence: true, layer: true },
+        });
 
-      const allEdges = await prisma.networkEdge.findMany({
-        where: { caseId },
-        include: { source: true, target: true },
-      });
+        const allEdges = await prisma.networkEdge.findMany({
+          where: { caseId },
+          include: { source: true, target: true },
+        });
 
-      const aiResp = await fetch(`${env.aiServiceUrl}/api/graph/build/${caseId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          case_id: caseId,
-          entities: allEntities,
-          relations: allEdges.map((edge) => ({
-            source: edge.source.label,
-            target: edge.target.label,
-            relation: edge.relationType,
-            evidence: edge.evidence,
-            weight: edge.weight,
-          })),
-        }),
-      });
+        const aiResp = await fetch(`${env.aiServiceUrl}/api/graph/build/${caseId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(60000),
+          body: JSON.stringify({
+            case_id: caseId,
+            entities: allEntities,
+            relations: allEdges.map((edge) => ({
+              source: edge.source.label,
+              target: edge.target.label,
+              relation: edge.relationType,
+              evidence: edge.evidence,
+              weight: edge.weight,
+            })),
+          }),
+        });
 
-      if (aiResp.ok) {
-        const graph = await aiResp.json() as {
-          nodes?: Array<{
-            label: string;
-            kingpin_score?: number;
-            role?: string;
-            centrality?: Record<string, number>;
-          }>;
-        };
+        if (aiResp.ok) {
+          const graph = (await aiResp.json()) as {
+            nodes?: Array<{
+              label: string;
+              kingpin_score?: number;
+              role?: string;
+              centrality?: Record<string, number>;
+            }>;
+          };
 
-        for (const gNode of graph.nodes ?? []) {
-          const isVic = gNode.label.toLowerCase().includes("victim");
-          const isWit = gNode.label.toLowerCase().includes("witness");
-          await prisma.networkNode.updateMany({
-            where: {
-              caseId,
-              label: { equals: gNode.label, mode: "insensitive" },
-            },
-            data: {
-              kingpinScore: (isVic || isWit) ? 0 : (gNode.kingpin_score ?? 0),
-              role: (isVic || isWit) ? "EXECUTOR" : (((gNode.role as any) ?? "EXECUTOR")),
-              centrality: gNode.centrality ?? {},
-            },
-          });
+          const isNonCriminalNode = (type: string, label: string, role?: string | null): boolean => {
+            const etype = String(type || "PERSON").toUpperCase();
+            const normVal = String(label || "").replace(/\s+/g, " ").trim().toUpperCase();
+            const valLower = normVal.toLowerCase();
+
+            if (
+              valLower.includes("billa") ||
+              valLower.includes("ranga") ||
+              valLower.includes("kuljeet") ||
+              valLower.includes("jasbir")
+            ) {
+              return false;
+            }
+
+            if (etype !== "PERSON" && etype !== "ALIAS" && etype !== "SUSPECT" && etype !== "ENTITY") return true;
+            if (role === "VICTIM" || role === "WITNESS" || role === "POLICE_OFFICER") return true;
+            if (
+              valLower.includes("victim") ||
+              valLower.includes("witness") ||
+              valLower.includes("informant") ||
+              valLower.includes("complainant") ||
+              valLower.includes("police") ||
+              valLower.includes("inspector") ||
+              valLower.includes("constable") ||
+              valLower.includes("bhagwan dass") ||
+              valLower.includes("court") ||
+              valLower.startsWith("sec ") ||
+              valLower.startsWith("section ")
+            ) {
+              return true;
+            }
+            return false;
+          };
+
+          for (const gNode of graph.nodes ?? []) {
+            const nonCriminal = isNonCriminalNode(gNode.entity_type, gNode.label, gNode.role);
+            await prisma.networkNode.updateMany({
+              where: {
+                caseId,
+                label: { equals: gNode.label, mode: "insensitive" },
+              },
+              data: {
+                kingpinScore: nonCriminal ? 0 : (gNode.kingpin_score ?? 0),
+                role: nonCriminal ? "EXECUTOR" : ((gNode.role as any) ?? "EXECUTOR"),
+                centrality: gNode.centrality ?? {},
+              },
+            });
+          }
         }
+      } catch (graphErr) {
+        logger.warn(`Background Graph ML rebuild skipped: ${String(graphErr)}`);
       }
-    } catch (graphErr) {
-      logger.warn(`Graph ML rebuild skipped: ${String(graphErr)}`);
-    }
+    })();
 
     await audit(
       { userId: user.id, ipAddress: req.ip },

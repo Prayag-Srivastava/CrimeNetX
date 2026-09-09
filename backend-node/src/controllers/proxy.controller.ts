@@ -33,6 +33,7 @@ export async function proxyToAI(req: Request, res: Response, next: NextFunction)
     const fetchOptions: RequestInit & { duplex?: "half" } = {
       method: req.method,
       headers,
+      signal: AbortSignal.timeout(180000),
     };
 
     if (req.method !== "GET" && req.method !== "HEAD") {

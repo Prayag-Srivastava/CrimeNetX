@@ -66,6 +66,11 @@ const io = new SocketServer(server, {
 });
 const unsubscribe = initAlertSocket(io);
 
+server.timeout = 180000;
+server.requestTimeout = 180000;
+server.headersTimeout = 185000;
+server.keepAliveTimeout = 120000;
+
 server.listen(env.port, "0.0.0.0", () => {
   logger.info(`CrimeNetX API listening on :${env.port} (${env.nodeEnv})`);
   logger.info(`AI service URL: ${env.aiServiceUrl}`);
