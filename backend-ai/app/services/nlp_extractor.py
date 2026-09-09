@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -32,6 +33,7 @@ from app.config import (
     USE_GLINER,
     SPACY_MODEL,
 )
+from app.models.schemas import Entity, EntityExtractionResponse, EntityType
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,87 @@ RELATION_TYPES = (
 )
 
 
+# ============================================================
+# Script detection
+# ------------------------------------------------------------
+# The agent/frontend path can hand us raw Devanagari (the forensic pipeline
+# translates in Stage 2, but the agent's text mode has no such stage), so we
+# need to recognise it and translate before NER runs.
+# ============================================================
+
+_INDIC_SCRIPTS = {
+    "DEVANAGARI", "BENGALI", "GUJARATI", "GURMUKHI", "KANNADA",
+    "MALAYALAM", "ORIYA", "ODIA", "TAMIL", "TELUGU", "ARABIC",
+    "OL", "MEETEI", "THAANA", "SINHALA",
+}
+
+
+def _script_of(ch: str) -> str:
+    try:
+        name = unicodedata.name(ch, "")
+    except ValueError:
+        return "UNKNOWN"
+    return name.split()[0] if name else "UNKNOWN"
+
+
+def indic_ratio(text: str) -> float:
+    """Fraction of alphabetic characters that are non-Latin Indic script."""
+    if not text:
+        return 0.0
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if _script_of(c) in _INDIC_SCRIPTS) / len(letters)
+
+
+def contains_indic(text: str) -> bool:
+    """True if any character belongs to an Indic script."""
+    return any(_script_of(c) in _INDIC_SCRIPTS for c in (text or "") if c.isalpha())
+
+
+def is_probably_english(text: str, threshold: float = 0.10) -> bool:
+    """True if the text is dominantly Latin script."""
+    return indic_ratio(text) < threshold
+
+
+# ============================================================
+# Label mapping for the agent path
+# ------------------------------------------------------------
+# extract_entities_with_spans() emits DB-shaped labels (PERSON, PHONE, ...)
+# from GLiNER and raw spaCy labels (PER, GPE, ORG, ...) from the spaCy
+# fallback. Both are mapped onto the EntityType enum here. Labels with no
+# EntityType equivalent (WEAPON, DRUG, MONEY, EMAIL, STOLEN_ITEM) map to
+# nothing and are dropped by the caller - the app's schema has no column
+# for them.
+# ============================================================
+
+_LABEL_MAP: dict[str, EntityType] = {
+    # GLiNER / regex DB labels
+    "PERSON": EntityType.PERSON,
+    "LOCATION": EntityType.LOCATION,
+    "ORGANIZATION": EntityType.ORGANIZATION,
+    "PHONE": EntityType.PHONE,
+    "VEHICLE": EntityType.VEHICLE,
+    "BANK_ACCOUNT": EntityType.BANK_ACCOUNT,
+    "CRYPTO_WALLET": EntityType.CRYPTO_WALLET,
+    "DATE": EntityType.DATE,
+    "ALIAS": EntityType.ALIAS,
+    # raw spaCy labels (spaCy fallback path)
+    "PER": EntityType.PERSON,
+    "GPE": EntityType.LOCATION,
+    "LOC": EntityType.LOCATION,
+    "FAC": EntityType.LOCATION,
+    "ORG": EntityType.ORGANIZATION,
+}
+
+# Labels that come from a statistical model rather than a deterministic
+# regex - scored slightly lower, and tagged as the "spacy" layer.
+_SPACY_LAYER_LABELS = {
+    "PERSON", "PER", "GPE", "LOC", "LOCATION", "FAC",
+    "ORG", "ORGANIZATION", "DATE",
+}
+
+
 class LlmRelation(BaseModel):
     source: str = Field(min_length=1)
     target: str = Field(min_length=1)
@@ -278,9 +361,48 @@ class NLPExtractor:
     # PUBLIC: entities
     # ========================================================
 
-    def extract_entities_with_spans(self, text: str) -> list[dict]:
+    def ensure_english(self, text: str) -> str:
+        """
+        Guarantee the extractor receives Latin-script text.
+
+        No-op for the ForensicPipeline, whose Stage 2 has already translated.
+        The agent / frontend text path has no such stage, so raw Devanagari can
+        arrive here - translate it inline rather than feeding it to a model
+        that was never trained on it. Falls back to the original text if
+        translation is unavailable, since degraded extraction beats none.
+        """
+        if not text or not text.strip():
+            return text or ""
+        if is_probably_english(text):
+            return text
+
+        try:
+            from app.services.language_detector import LanguageDetector
+            from app.services.translator import TranslatorService
+
+            detection = LanguageDetector().detect(text)
+            logger.warning(
+                "ensure_english(): non-Latin text reached NER "
+                f"(indic_ratio={indic_ratio(text):.2f}, lang={detection.language}). "
+                "Translating inline; the caller should ideally translate upstream."
+            )
+            result = TranslatorService().translate(
+                text,
+                source_lang=detection.language,
+                source_indictrans_code=detection.indictrans_code,
+            )
+            return result.translated_text if result.success else text
+        except Exception as exc:
+            logger.warning(f"ensure_english(): translation unavailable ({exc})")
+            return text
+
+    def extract_entities_with_spans(
+        self, text: str, already_english: bool = False
+    ) -> list[dict]:
         if not text or len(text.strip()) < 5:
             return []
+        if not already_english:
+            text = self.ensure_english(text)
 
         entities: list[dict] = []
 
@@ -983,8 +1105,81 @@ def get_shared_extractor() -> NLPExtractor:
     return _shared_extractor
 
 
-def extract_entities(text: str) -> list[dict]:
-    return get_shared_extractor().extract_entities_with_spans(text)
+# `get_extractor` is the name the LangGraph agents use; keep both so either
+# spelling resolves to the same singleton.
+get_extractor = get_shared_extractor
+
+
+def extract_entities(
+    text: str,
+    source_name: str = "agent",
+    case_id: Optional[str] = None,
+    already_english: bool = False,
+) -> EntityExtractionResponse:
+    """
+    Entity + relation extraction for the agent path.
+
+    Returns the validated EntityExtractionResponse the LangGraph agents expect
+    (`entity_agent`, `supervisor_agent`), rather than raw dicts. Labels with no
+    EntityType equivalent are dropped, and anything still in Indic script after
+    translation is filtered out so it never reaches the UI.
+    """
+    extractor = get_shared_extractor()
+    warnings: list[str] = []
+
+    work_text = text if already_english else extractor.ensure_english(text)
+    if not already_english and work_text is not text:
+        warnings.append("Text was auto-translated to English before extraction.")
+
+    raw_entities, relations = extractor.extract_entities_and_relations(work_text)
+
+    entities: list[Entity] = []
+    for item in raw_entities:
+        label = str(item.get("label") or "").upper()
+        value = str(item.get("text") or "").strip()
+        if not value:
+            continue
+
+        entity_type = _LABEL_MAP.get(label)
+        if entity_type is None:
+            continue                      # no column for WEAPON/DRUG/MONEY/etc.
+        if contains_indic(value):         # final safety net before the UI
+            continue
+
+        attributes: dict[str, Any] = {
+            "start": item.get("start"),
+            "end": item.get("end"),
+            "source_sentence": str(item.get("source_sentence", ""))[:200],
+            "page": item.get("page", 1),
+        }
+        if case_id:
+            attributes["case_id"] = case_id
+        if item.get("gliner_label"):
+            attributes["gliner_label"] = item["gliner_label"]
+
+        entities.append(
+            Entity(
+                id=None,
+                type=entity_type,
+                value=value,
+                confidence=float(item.get("confidence", 0.85)),
+                extracted_from=source_name,
+                layer="spacy" if label in _SPACY_LAYER_LABELS else "regex",
+                attributes=attributes,
+            )
+        )
+
+    # Co-occurrence fallback evidence always starts with "Co-mentioned".
+    llm_used = bool(relations) and not all(
+        str(r.get("evidence", "")).startswith("Co-mentioned") for r in relations
+    )
+
+    return EntityExtractionResponse(
+        entities=entities,
+        relations=relations,
+        llm_used=llm_used,
+        warnings=warnings,
+    )
 
 
 def extract_entities_with_spans(text: str) -> list[dict]:
