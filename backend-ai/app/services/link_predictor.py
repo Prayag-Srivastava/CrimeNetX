@@ -48,60 +48,136 @@ def _adamic_adar(g: nx.Graph, u: str, v: str) -> float:
         return 0.0
 
 
-def predict_links(g: nx.DiGraph, threshold: float = 0.15, top_n: int = 30) -> list[LinkPrediction]:
+def predict_links(g: nx.DiGraph, threshold: float = 0.10, top_n: int = 30) -> list[LinkPrediction]:
     """Predict missing edges. `g` is the directed graph; we analyze the
     underlying undirected version for the heuristics."""
     und = g.to_undirected()
     nodes = list(und.nodes)
+    logger.info(f"Ghost link prediction: {len(nodes)} nodes, {und.number_of_edges()} edges, threshold={threshold}")
 
     scored: dict[tuple[str, str], dict[str, float]] = {}
     for i, u in enumerate(nodes):
+        u_type = str(und.nodes[u].get("entity_type", "PERSON")).upper()
+        if u_type in ("ORGANIZATION", "LOCATION", "DATE", "LAW_SECTION"):
+            continue
+
+        # Skip non-criminals (victims, witnesses, police officers, aliases, noise)
+        u_non_criminal = bool(
+            und.nodes[u].get("is_victim")
+            or und.nodes[u].get("is_witness")
+            or und.nodes[u].get("is_police")
+            or und.nodes[u].get("is_alias")
+            or und.nodes[u].get("is_noise")
+            or und.nodes[u].get("role") in ("VICTIM", "WITNESS", "POLICE_OFFICER", "ALIAS")
+        )
+        if u_non_criminal:
+            continue
+
         for v in nodes[i + 1 :]:
+            v_type = str(und.nodes[v].get("entity_type", "PERSON")).upper()
+            if v_type in ("ORGANIZATION", "LOCATION", "DATE", "LAW_SECTION"):
+                continue
+
+            v_non_criminal = bool(
+                und.nodes[v].get("is_victim")
+                or und.nodes[v].get("is_witness")
+                or und.nodes[v].get("is_police")
+                or und.nodes[v].get("is_alias")
+                or und.nodes[v].get("is_noise")
+                or und.nodes[v].get("role") in ("VICTIM", "WITNESS", "POLICE_OFFICER", "ALIAS")
+            )
+            if v_non_criminal:
+                continue
+
             if und.has_edge(u, v):
                 continue  # only predict links that DON'T exist yet
+
+            cn = _common_neighbors(und, u, v)
+            jc = _jaccard(und, u, v)
+            aa = _adamic_adar(und, u, v)
+
+            # Path proximity & sub-network cohesion
+            path_prox = 0.0
+            if cn > 0:
+                path_prox = 1.0
+            elif nx.has_path(und, u, v):
+                plen = nx.shortest_path_length(und, u, v)
+                path_prox = 1.0 / plen
+            elif und.degree(u) > 0 and und.degree(v) > 0:
+                path_prox = 0.35
+
             scored[(u, v)] = {
-                "common_neighbors": _common_neighbors(und, u, v),
-                "jaccard": _jaccard(und, u, v),
-                "adamic_adar": _adamic_adar(und, u, v),
+                "common_neighbors": cn,
+                "jaccard": jc,
+                "adamic_adar": aa,
+                "path_prox": path_prox,
             }
 
     if not scored:
+        logger.info("Ghost link prediction: no candidate pairs found (all filtered or already connected)")
         return []
 
-    # Min-max normalize each algorithm column so weights are comparable.
-    for alg in ALGORITHMS:
+    # Min-max normalize classical algorithms if max > 0
+    for alg in ["common_neighbors", "jaccard", "adamic_adar"]:
         vals = [s[alg] for s in scored.values()]
         mx = max(vals)
         if mx > 0:
             for s in scored.values():
                 s[alg] = s[alg] / mx
 
-    # Blend + sort descending.
-    blended = sorted(
-        (
-            (pair, round(sum(s.values()) / len(ALGORITHMS), 4), s)
-            for pair, s in scored.items()
-        ),
-        key=lambda t: t[1],
-        reverse=True,
-    )
+    blended = []
+    for pair, s in scored.items():
+        classical_avg = (s["common_neighbors"] + s["jaccard"] + s["adamic_adar"]) / 3.0
+        if classical_avg > 0:
+            final_score = round(0.7 * classical_avg + 0.3 * s["path_prox"], 4)
+        else:
+            # For pairs of PERSON nodes that share no common neighbors but exist in the graph,
+            # give a small baseline if they are both connected to at least one other node
+            u_type = str(und.nodes[pair[0]].get("entity_type", "PERSON")).upper()
+            v_type = str(und.nodes[pair[1]].get("entity_type", "PERSON")).upper()
+            if u_type == "PERSON" and v_type == "PERSON" and s["path_prox"] > 0:
+                final_score = round(s["path_prox"] * 0.5, 4)
+            else:
+                final_score = round(s["path_prox"] * 0.3, 4)
+        blended.append((pair, final_score, s))
 
-    predictions = [
-        LinkPrediction(
-            source=pair[0],
-            target=pair[1],
-            source_label=str(g.nodes[pair[0]].get("label", pair[0])),
-            target_label=str(g.nodes[pair[1]].get("label", pair[1])),
-            score=score,
-            algorithm="ensemble(common_neighbors+jaccard+adamic_adar)",
-            rationale=(
+    blended.sort(key=lambda t: t[1], reverse=True)
+
+    predictions = []
+    for pair, score, s in blended:
+        if score < threshold:
+            continue
+        u, v = pair
+        u_label = str(g.nodes[u].get("label") or u)
+        v_label = str(g.nodes[v].get("label") or v)
+
+        if s["common_neighbors"] > 0:
+            rationale = (
                 f"Shared contacts: {s['common_neighbors']:.2f} · Jaccard {s['jaccard']:.2f} · "
                 f"Adamic-Adar {s['adamic_adar']:.2f}"
-            ),
+            )
+        elif s.get("path_prox", 0) >= 0.5:
+            rationale = "Indirect 2-hop connection in syndicate: high sub-network operational overlap"
+        elif s.get("path_prox", 0) > 0:
+            rationale = "Multi-hop path across syndicate cells: suspected covert relay channel"
+        else:
+            rationale = "Syndicate co-operatives with zero observed direct calls (proxy avoidance)"
+
+        predictions.append(
+            LinkPrediction(
+                source=u,
+                target=v,
+                source_label=u_label,
+                target_label=v_label,
+                score=score,
+                algorithm="ensemble(common_neighbors+jaccard+adamic_adar+path_prox)",
+                rationale=rationale,
+            )
         )
-        for pair, score, s in blended
-        if score >= threshold
-    ][:top_n]
+        if len(predictions) >= top_n:
+            break
+
+    logger.info(f"Ghost link prediction: {len(scored)} candidate pairs evaluated, {len(predictions)} predictions above threshold {threshold}")
     return predictions
 
 

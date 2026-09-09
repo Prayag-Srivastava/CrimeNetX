@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from pydantic import BaseModel, Field
 from app.services.pipeline import ForensicPipeline
 from app.models.schemas import PipelineResponse, ProvenanceResponse, IntegrityCheckResponse
 from app.utils.text_storage import TextStorage
@@ -213,3 +214,131 @@ async def verify_integrity(case_id: str, document_id: str):
         checks=result.get("checks", []),
         error=result.get("error"),
     )
+
+
+# ============================================================
+# CASE NETWORK REBUILD ENDPOINT (GLiNER-relex + SAMYOJAN + Graph ML)
+# ============================================================
+class RebuildCaseNetworkRequest(BaseModel):
+    case_id: str
+    case_narrative: Optional[str] = ""
+    documents_text: Optional[list[str]] = []
+    existing_entities: Optional[list[dict]] = []
+
+
+@router.post("/rebuild-case-network")
+async def rebuild_case_network(req: RebuildCaseNetworkRequest):
+    """
+    Full-cycle network rebuild:
+    1. Extracts entities and relations from case narrative & evidence documents using GLiNER-relex joint extraction.
+    2. Runs SAMYOJAN Entity Resolution to merge aliases and cross-references.
+    3. Categorizes roles (VICTIM, WITNESS, POLICE_OFFICER, ALIAS, SUSPECT).
+    4. Computes NetworkX graph analytics (PageRank, Betweenness, composite Kingpin score) while preventing victims/witnesses/police from being scored as syndicate leaders.
+    5. Computes Ghost Link predictions between unlinked suspects with human-readable labels.
+    """
+    from app.services.graph_analyzer import analyze, build_graph
+    from app.services.link_predictor import predict_links
+
+    pipeline = get_pipeline()
+
+    # 1. Combine narrative & documents
+    text_blocks = []
+    if req.case_narrative and req.case_narrative.strip():
+        text_blocks.append(req.case_narrative.strip())
+
+    # Load stored OCR/translated text from TextStorage for this case
+    # This provides the actual evidence content rather than just filenames
+    try:
+        storage = TextStorage()
+        import os
+        case_dir = storage.base_dir / req.case_id
+        if case_dir.exists():
+            for f in sorted(case_dir.iterdir()):
+                if f.suffix == ".txt" and ("_translated" in f.name or "_raw" in f.name):
+                    stored_text = f.read_text(encoding="utf-8").strip()
+                    if stored_text and len(stored_text) > 20:
+                        text_blocks.append(stored_text)
+                        logger.info(f"rebuild: loaded stored text from {f.name} ({len(stored_text)} chars)")
+    except Exception as e:
+        logger.warning(f"Could not load stored case texts: {e}")
+
+    if req.documents_text:
+        for doc in req.documents_text:
+            if doc and doc.strip() and len(doc.strip()) > 30:
+                # Only add if it looks like actual document text, not a filename
+                text_blocks.append(doc.strip())
+
+    combined_text = "\n\n".join(text_blocks)
+
+    extracted_entities = []
+    extracted_relations = []
+    resolution_report = None
+
+    if len(combined_text.strip()) >= 15:
+        # Run GLiNER-relex joint extraction
+        logger.info(f"rebuild: running GLiNER-relex on {len(combined_text)} chars of combined text")
+        raw_ents, raw_rels = pipeline._get_nlp_extractor().extract_entities_and_relations(combined_text)
+        logger.info(f"rebuild: GLiNER-relex produced {len(raw_ents)} entities, {len(raw_rels)} relations")
+        # Run SAMYOJAN entity resolution
+        try:
+            resolved_ents, res_rep = pipeline.resolver.resolve_entities(raw_ents, case_id=req.case_id)
+            extracted_entities = resolved_ents
+            resolution_report = res_rep
+        except Exception as e:
+            logger.warning(f"SAMYOJAN resolution during rebuild failed, using raw: {e}")
+            extracted_entities = raw_ents
+        extracted_relations = raw_rels
+    else:
+        logger.warning(f"rebuild: combined text too short ({len(combined_text.strip())} chars), skipping extraction")
+
+    # If text extraction produced no entities, fall back to existing_entities
+    if not extracted_entities and req.existing_entities:
+        extracted_entities = req.existing_entities
+
+    # Standardize entity schema for graph processing
+    graph_entities = []
+    for ent in extracted_entities:
+        val = ent.get("value") or ent.get("text") or ""
+        if not val or len(val.strip()) < 2:
+            continue
+        etype = ent.get("type") or ent.get("label") or "ENTITY"
+        eid = str(ent.get("id") or f"{etype}:{val}")
+        role = ent.get("role")
+        is_victim = bool(ent.get("is_victim") or role == "VICTIM" or "victim" in val.lower())
+        is_witness = bool(ent.get("is_witness") or role == "WITNESS" or "witness" in val.lower())
+        is_police = bool(ent.get("is_police") or role == "POLICE_OFFICER" or "inspector" in val.lower())
+        is_alias = bool(ent.get("is_alias") or role == "ALIAS" or etype == "ALIAS")
+        is_noise = bool(ent.get("is_noise") or is_alias or etype in ("DATE", "LAW_SECTION", "MONEY"))
+
+        graph_entities.append({
+            "id": eid,
+            "value": val,
+            "type": etype,
+            "confidence": ent.get("confidence", 0.9),
+            "role": role,
+            "is_victim": is_victim,
+            "is_witness": is_witness,
+            "is_police": is_police,
+            "is_alias": is_alias,
+            "is_noise": is_noise,
+        })
+
+    # Run Graph ML Analytics
+    graph = analyze(req.case_id, graph_entities, extracted_relations)
+
+    # Run Ghost Link Predictions on the resulting NetworkX graph
+    g_nx, _ = build_graph(req.case_id, graph_entities, extracted_relations)
+    ghost_links = predict_links(g_nx, threshold=0.10) if g_nx.number_of_nodes() > 1 else []
+
+    return {
+        "success": True,
+        "case_id": req.case_id,
+        "entities": graph_entities,
+        "relations": extracted_relations,
+        "graph": graph.model_dump() if hasattr(graph, "model_dump") else graph,
+        "predictions": [p.model_dump() if hasattr(p, "model_dump") else p for p in ghost_links],
+        "resolution_report": {
+            "merges": resolution_report.merges,
+            "reviews": resolution_report.reviews,
+        } if resolution_report else None,
+    }

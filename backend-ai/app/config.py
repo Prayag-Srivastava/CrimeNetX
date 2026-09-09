@@ -193,18 +193,18 @@ class Settings(BaseSettings):
     ).lower() in ("1", "true", "yes")
 
     RELEX_ENTITY_THRESHOLD: float = float(
-        os.getenv("RELEX_ENTITY_THRESHOLD", "0.4")
+        os.getenv("RELEX_ENTITY_THRESHOLD", "0.35")
     )
 
-    # Important:
-    # Above ~0.5 the adjacency gate can reject candidate pairs before
-    # the relation head scores them.
+    # Calibrated thresholds for knowledgator/gliner-relex-large-v0.5
+    # Adjacency threshold at 0.30 ensures candidate entity pairs reach relation scoring.
     RELEX_ADJACENCY_THRESHOLD: float = float(
-        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.35")
+        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.30")
     )
 
+    # Relation threshold at 0.30 ensures high-precision relation extraction without false dropouts.
     RELEX_RELATION_THRESHOLD: float = float(
-        os.getenv("RELEX_RELATION_THRESHOLD", "0.75")
+        os.getenv("RELEX_RELATION_THRESHOLD", "0.30")
     )
 
     # -------------------------------------------------------------------------

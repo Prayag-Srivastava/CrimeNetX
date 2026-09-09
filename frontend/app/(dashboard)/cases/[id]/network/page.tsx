@@ -73,32 +73,27 @@ export default function NetworkPage() {
     () => new Map(displayNodes.map((n) => [n.id, n.label])),
     [displayNodes]
   );
+
+
+  // Auto-scan ghost links when network loads
   useEffect(() => {
-    console.log("NETWORK NODE IDS:", displayNodes.map((n) => ({
-      id: n.id,
-      label: n.label,
-    })));
-
-    console.log("PREDICTION IDS:", predictions.map((p) => ({
-      source: p.source,
-      target: p.target,
-    })));
-
-    console.log("MAP LOOKUPS:", predictions.map((p) => ({
-      source: nodeLabelById.get(p.source),
-      target: nodeLabelById.get(p.target),
-    })));
-  }, [displayNodes, predictions, nodeLabelById]);
+    if (network && network.nodes.length >= 2 && predictions.length === 0) {
+      void predictLinks();
+    }
+  }, [network]);
 
   const predictLinks = useCallback(async () => {
-    if (!network) return;
+    if (!network || network.nodes.length < 2) return;
     try {
       const { data } = await aiApi.post<{ predictions: LinkPrediction[] }>(`/graph/predict-links/${id}`, {
         case_id: id,
         entities: network.nodes.map((n) => ({
           id: n.id,
-          type: "PERSON",
+          type: (n as any).entityType || "PERSON",
           value: n.label,
+          role: n.role,
+          is_victim: (n as any).personRole === "VICTIM",
+          is_witness: (n as any).personRole === "WITNESS",
         })),
         relations: network.edges.map((e) => ({
           source: e.sourceId,
@@ -107,28 +102,29 @@ export default function NetworkPage() {
         })),
         threshold: 0.1,
       });
-      setPredictions(data.predictions);
-      toast("Ghost link scan", `${data.predictions.length} hidden links predicted`);
+      setPredictions(data.predictions || []);
     } catch (err) {
-      toast("Prediction failed", extractErrorMessage(err), "destructive");
+      console.warn("Prediction scan error:", err);
     }
-  }, [id, network, toast]);
+  }, [id, network]);
 
   const acceptPrediction = useCallback(
     async (p: LinkPrediction, accept: boolean) => {
       try {
+        const srcName = nodeLabelById.get(p.source) || p.source_label || p.source;
+        const tgtName = nodeLabelById.get(p.target) || p.target_label || p.target;
         await api.post(`/case/${id}/predictions/review`, {
           source: p.source,
           target: p.target,
-          source_label: nodeLabelById.get(p.source),
-          target_label: nodeLabelById.get(p.target),
+          source_label: srcName,
+          target_label: tgtName,
           accepted: accept,
           score: p.score,
         });
         setPredictions((prev) => prev.filter((x) => !(x.source === p.source && x.target === p.target)));
         toast(
           accept ? "Ghost link accepted" : "Prediction dismissed",
-          `${nodeLabelById.get(p.source) ?? p.source} ↔ ${nodeLabelById.get(p.target) ?? p.target}`
+          `${srcName} ↔ ${tgtName}`
         );
         if (accept) await loadNetwork();
       } catch (err) {
@@ -193,28 +189,39 @@ export default function NetworkPage() {
                   Run a scan to surface hidden relationships (Jaccard + Common Neighbors + Adamic-Adar).
                 </p>
               )}
-              {predictions.slice(0, 6).map((p, i) => (
-                <div key={i} className="rounded-lg border p-3">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium">
-                      {nodeLabelById.get(p.source) ?? `UNKNOWN: ${p.source}`}
-                    </span>
-                    <span className="text-muted-foreground">↔</span>
-                    <span className="font-medium">
-                      {nodeLabelById.get(p.target) ?? `UNKNOWN: ${p.target}`}
-                    </span>
-                    <Badge variant={p.score > 0.5 ? "warning" : "secondary"}>{Math.round(p.score * 100)}%</Badge>
+              {predictions.slice(0, 6).map((p, i) => {
+                const sName = nodeLabelById.get(p.source) || p.source_label || p.source;
+                const tName = nodeLabelById.get(p.target) || p.target_label || p.target;
+                return (
+                  <div key={i} className="rounded-lg border p-3 bg-card/60 backdrop-blur">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold text-foreground">
+                        {sName}
+                      </span>
+                      <span className="text-muted-foreground mx-2">↔</span>
+                      <span className="font-semibold text-foreground">
+                        {tName}
+                      </span>
+                      <Badge variant={p.score >= 0.4 ? "warning" : "secondary"}>
+                        {Math.round(p.score * 100)}%
+                      </Badge>
+                    </div>
+                    {p.rationale && (
+                      <p className="mt-1.5 text-xs text-muted-foreground line-clamp-2">
+                        {p.rationale}
+                      </p>
+                    )}
+                    <div className="mt-2.5 flex gap-2">
+                      <Button size="sm" variant="success" onClick={() => void acceptPrediction(p, true)} className="h-7 px-2.5 text-xs">
+                        Accept
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => void acceptPrediction(p, false)} className="h-7 px-2.5 text-xs">
+                        Dismiss
+                      </Button>
+                    </div>
                   </div>
-                  <div className="mt-2 flex gap-2">
-                    <Button size="sm" variant="success" onClick={() => void acceptPrediction(p, true)} className="h-7 px-2 text-xs">
-                      Accept
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => void acceptPrediction(p, false)} className="h-7 px-2 text-xs">
-                      Reject
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </CardContent>
           </Card>
         </div>

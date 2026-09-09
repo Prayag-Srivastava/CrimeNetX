@@ -48,9 +48,9 @@ try:
 except ImportError:
     GLINER_RELEX_MODEL = "knowledgator/gliner-relex-large-v0.5"
     USE_GLINER_RELEX = True
-    RELEX_ENTITY_THRESHOLD = 0.4
-    RELEX_ADJACENCY_THRESHOLD = 0.55
-    RELEX_RELATION_THRESHOLD = 0.75
+    RELEX_ENTITY_THRESHOLD = 0.25
+    RELEX_ADJACENCY_THRESHOLD = 0.20
+    RELEX_RELATION_THRESHOLD = 0.20
     GROQ_RELATION_FALLBACK = False
 
 
@@ -85,6 +85,7 @@ CRIME_ENTITY_LABELS: dict[str, str] = {
     "court name": "Name of a court",
     "case number": "FIR number, case number, or CR number",
     "email": "Email address",
+    "alias": "Nickname, alias, also known as name of a person",
     "other": "Entity involved in a relation but not matching other types",
 }
 
@@ -133,6 +134,7 @@ GLINER_LABEL_TO_DB = {
     "court name": "ORGANIZATION",
     "case number": "ORGANIZATION",
     "email": "EMAIL",
+    "alias": "ALIAS",
     "other": "ORGANIZATION",
 }
 
@@ -143,9 +145,10 @@ RELATION_TO_DB: dict[str, str] = {
     "phone_call": "phone_call",
     "financial_transfer": "financial_transfer",
     "co_location": "co_location",
-    "victim_of": "associate",
-    "witness_to": "associate",
-    "accused_of": "associate",
+    "co_accused": "co_accused",
+    "victim_of": "victim_of",
+    "witness_to": "witness_to",
+    "accused_of": "co_accused",
     "owns": "associate",
     "works_at": "same_organization",
     "member_of": "same_organization",
@@ -169,6 +172,9 @@ RELATION_TYPES = (
     "phone_call",
     "financial_transfer",
     "co_location",
+    "co_accused",
+    "victim_of",
+    "witness_to",
 )
 
 
@@ -344,6 +350,8 @@ class NLPExtractor:
         if self._extraction_engine == "gliner-relex" and self._relex_model:
             ents, rels = self._relex_joint(text, want_relations=True)
             ents = self._deduplicate_entities(ents + self._extract_with_regex(text))
+            pattern_rels = self._grounded_pattern_relations(text, ents)
+            rels = self._deduplicate_relations(rels + pattern_rels)
             if not rels:
                 if GROQ_RELATION_FALLBACK and GROQ_API_KEY:
                     try:
@@ -384,14 +392,77 @@ class NLPExtractor:
                 ent_text = str(ent.get("text", "")).strip()
                 if not ent_text:
                     continue
+
+                # Filter out pure grammatical role descriptors that are not actual names
+                generic_descriptors = {
+                    "victim", "complainant", "informant", "eyewitness", "witness",
+                    "accused", "co-accused", "suspect", "gangster", "criminal",
+                    "police officer", "investigating officer", "io", "inspector",
+                    "sub-inspector", "constable", "judge", "advocate", "complainant victim",
+                    "mastermind", "kingpin", "broker", "key operative", "deceased",
+                    "the accused", "the victim", "the complainant", "the informant",
+                    "the witness", "the suspect", "the deceased", "the petitioner",
+                    "petitioner", "respondent", "deponent", "applicant",
+                    "unknown", "unknown person", "unknown persons",
+                    "said accused", "said person", "said suspect",
+                    "accused person", "accused persons", "the said accused",
+                    "first accused", "second accused", "third accused",
+                    "injured", "injured person", "the injured",
+                }
+                if ent_text.lower().strip() in generic_descriptors:
+                    continue
+                # Also filter short single-word generic terms
+                if len(ent_text.split()) == 1 and ent_text.lower() in {
+                    "he", "she", "they", "him", "her", "his", "them",
+                    "accused", "victim", "witness", "complainant",
+                    "suspect", "deceased", "informant", "petitioner",
+                }:
+                    continue
+
                 start = int(ent.get("start", 0))
                 end = int(ent.get("end", start + len(ent_text)))
                 source_sentence = self._find_source_sentence(chunk, start, end)
+
+                is_victim = label_raw in ("victim", "complainant", "informant")
+                is_witness = label_raw in ("witness", "eyewitness")
+                is_police = label_raw in ("police officer", "police", "investigating officer", "io", "inspector", "sub-inspector")
+                is_alias = label_raw in ("alias", "nickname")
+                is_noise = label_raw in ("law section", "law_section", "date", "money", "section", "time", "money amount")
+
+                # Context-aware role detection from surrounding sentence
+                if source_sentence:
+                    sent_lower = source_sentence.lower()
+                    victim_cues = ["victim", "complainant", "informant", "reported", "suffered", "cheated", "defrauded"]
+                    witness_cues = ["witness", "eyewitness", "observed", "saw the incident"]
+                    police_cues = ["inspector", "sub-inspector", "constable", "sho", "investigating officer", "police officer"]
+                    ent_lower = ent_text.lower()
+                    if not is_victim and any(f"{cue} {ent_lower}" in sent_lower or f"{ent_lower} {cue}" in sent_lower for cue in ["victim", "complainant"]):
+                        is_victim = True
+                    if not is_witness and any(f"{cue} {ent_lower}" in sent_lower or f"{ent_lower} {cue}" in sent_lower for cue in ["witness", "eyewitness"]):
+                        is_witness = True
+                    if not is_police and any(f"{cue} {ent_lower}" in sent_lower or f"{ent_lower} {cue}" in sent_lower for cue in ["inspector", "constable", "sho"]):
+                        is_police = True
+
+                role = (
+                    "VICTIM" if is_victim
+                    else "WITNESS" if is_witness
+                    else "POLICE_OFFICER" if is_police
+                    else "ALIAS" if is_alias
+                    else "SUSPECT" if label_raw in ("suspect", "criminal", "gangster", "accused", "kingpin")
+                    else None
+                )
+
                 all_entities.append(
                     {
                         "text": ent_text,
                         "label": db_label,
                         "gliner_label": label_raw,
+                        "role": role,
+                        "is_victim": is_victim,
+                        "is_witness": is_witness,
+                        "is_police": is_police,
+                        "is_alias": is_alias,
+                        "is_noise": is_noise,
                         "start": offset + start,
                         "end": offset + end,
                         "confidence": round(float(ent.get("score", 0.5)), 3),
@@ -401,6 +472,10 @@ class NLPExtractor:
                     }
                 )
 
+            # Build quick lookups for role-aware edge validation
+            victim_texts = {e["text"].lower() for e in all_entities if e.get("is_victim")}
+            witness_texts = {e["text"].lower() for e in all_entities if e.get("is_witness")}
+
             for rel in raw_rels:
                 head = rel.get("head") or {}
                 tail = rel.get("tail") or {}
@@ -408,12 +483,22 @@ class NLPExtractor:
                 target = str(tail.get("text", "")).strip()
                 if not source or not target or source.lower() == target.lower():
                     continue
+
                 rname = str(rel.get("relation", "associate")).strip().lower()
                 db_rel = RELATION_TO_DB.get(rname, "associate")
+
+                # CRITICAL RULE: Non-criminals (victims, witnesses) CANNOT be syndicate associates or co-accused!
+                s_low, t_low = source.lower(), target.lower()
+                if s_low in victim_texts or t_low in victim_texts:
+                    db_rel = "victim_of"
+                elif s_low in witness_texts or t_low in witness_texts:
+                    db_rel = "witness_to"
+
                 if db_rel not in RELATION_TYPES:
                     db_rel = "associate"
+
                 score = float(rel.get("score", 0.5))
-                # Prefer FIR-grounded evidence (your design)
+                # Prefer FIR-grounded evidence
                 evidence = self._find_relationship_evidence(text, source, target)
                 if not evidence or evidence.startswith("Relationship extracted"):
                     evidence = (
@@ -902,6 +987,146 @@ FIR:
                     }
                 )
         logger.info(f"Co-occurrence fallback: {len(relations)} relations")
+        return relations
+
+    @staticmethod
+    def _deduplicate_relations(relations: list[dict]) -> list[dict]:
+        seen = set()
+        deduped = []
+        for r in relations:
+            s = str(r.get("source", "")).strip()
+            t = str(r.get("target", "")).strip()
+            if not s or not t or s.lower() == t.lower():
+                continue
+            rel = str(r.get("relation", "associate")).strip()
+            pair_key = (min(s.lower(), t.lower()), max(s.lower(), t.lower()), rel)
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+            deduped.append(r)
+        return deduped
+
+    def _grounded_pattern_relations(
+        self, text: str, entities: list[dict]
+    ) -> list[dict]:
+        """High-precision deterministic relation patterns extracted directly from case text without LLM."""
+        if not text:
+            return []
+
+        relations: list[dict] = []
+        victim_names = {e["text"].lower() for e in entities if e.get("is_victim")}
+
+        # 1. Family patterns (e.g. "Ravi Jadhav s/o Mohan Jadhav", "wife of Suresh")
+        family_regex = re.compile(
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(?:s/o|d/o|w/o|son of|daughter of|wife of|husband of|brother of|father of|mother of)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b",
+            re.IGNORECASE,
+        )
+        for m in family_regex.finditer(text):
+            p1, p2 = m.group(1).strip(), m.group(2).strip()
+            if p1 and p2 and p1.lower() != p2.lower():
+                relations.append({
+                    "source": p1,
+                    "target": p2,
+                    "relation": "family",
+                    "evidence": self._find_source_sentence(text, m.start(), m.end()),
+                    "weight": 0.95,
+                    "engine": "grounded_pattern",
+                })
+
+        # 2. Co-accused / Syndicate associates (e.g. "along with co-accused Vikram Singh", "Sharad Mohol and co-accused Ravi Jadhav")
+        coaccused_regex = re.compile(
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(?:along with|assisted by|together with|in conspiracy with|partnered with|acting on orders of|and co-accused|and associate|and accused|and)\s+(?:co-accused\s+|accused\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b",
+            re.IGNORECASE,
+        )
+        for m in coaccused_regex.finditer(text):
+            p1, p2 = m.group(1).strip(), m.group(2).strip()
+            if p1 and p2 and p1.lower() != p2.lower():
+                rel_type = "co_accused"
+                if p1.lower() in victim_names or p2.lower() in victim_names:
+                    rel_type = "victim_of"
+                relations.append({
+                    "source": p1,
+                    "target": p2,
+                    "relation": rel_type,
+                    "evidence": self._find_source_sentence(text, m.start(), m.end()),
+                    "weight": 0.85,
+                    "engine": "grounded_pattern",
+                })
+
+        # 2b. Accused numbering patterns ("A-1 Ravi Jadhav", "accused no. 1 Vikram", "Accused 1. Ravi")
+        accused_numbered = re.compile(
+            r"(?:accused\s*(?:no\.?\s*)?|A-?)(\d)\s*[.:\-]?\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)",
+            re.IGNORECASE,
+        )
+        numbered_accused_names: list[str] = []
+        for m in accused_numbered.finditer(text):
+            name = m.group(2).strip()
+            if name and name.lower() not in victim_names:
+                numbered_accused_names.append(name)
+        # Link all numbered accused as co_accused pairs
+        for i, a in enumerate(numbered_accused_names):
+            for b in numbered_accused_names[i + 1:]:
+                if a.lower() != b.lower():
+                    relations.append({
+                        "source": a,
+                        "target": b,
+                        "relation": "co_accused",
+                        "evidence": f"Both listed as numbered accused in the FIR/chargesheet",
+                        "weight": 0.90,
+                        "engine": "grounded_pattern",
+                    })
+
+        # 3. Victimization patterns (e.g. "cheated victim Suresh Sharma", "reported extortion threats by gangster Sharad Mohol")
+        victim_regex = re.compile(
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(?:reported extortion threats by|threatened by|cheated|extorted|defrauded|threatened|assaulted|attacked|robbed|targeted)\s+(?:by\s+)?(?:gangster\s+|accused\s+|co-accused\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b",
+            re.IGNORECASE,
+        )
+        for m in victim_regex.finditer(text):
+            p1, p2 = m.group(1).strip(), m.group(2).strip()
+            if p1 and p2 and p1.lower() != p2.lower():
+                relations.append({
+                    "source": p1,
+                    "target": p2,
+                    "relation": "victim_of",
+                    "evidence": self._find_source_sentence(text, m.start(), m.end()),
+                    "weight": 0.90,
+                    "engine": "grounded_pattern",
+                })
+
+        # 4. Financial transfer patterns (e.g. "Vikram Singh transferred Rs. 50,000 to Ravi Jadhav")
+        financial_regex = re.compile(
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(?:transferred|paid|remitted|sent)\s+(?:Rs\.?|INR|\$)?\s*[\d,]+\s+(?:to|into the account of)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b",
+            re.IGNORECASE,
+        )
+        for m in financial_regex.finditer(text):
+            p1, p2 = m.group(1).strip(), m.group(2).strip()
+            if p1 and p2 and p1.lower() != p2.lower():
+                relations.append({
+                    "source": p1,
+                    "target": p2,
+                    "relation": "financial_transfer",
+                    "evidence": self._find_source_sentence(text, m.start(), m.end()),
+                    "weight": 0.90,
+                    "engine": "grounded_pattern",
+                })
+
+        # 5. Phone communication patterns (e.g. "Ravi called Vikram Singh")
+        phone_regex = re.compile(
+            r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(?:called|contacted|phoned|communicated with)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b",
+            re.IGNORECASE,
+        )
+        for m in phone_regex.finditer(text):
+            p1, p2 = m.group(1).strip(), m.group(2).strip()
+            if p1 and p2 and p1.lower() != p2.lower():
+                relations.append({
+                    "source": p1,
+                    "target": p2,
+                    "relation": "phone_call",
+                    "evidence": self._find_source_sentence(text, m.start(), m.end()),
+                    "weight": 0.85,
+                    "engine": "grounded_pattern",
+                })
+
         return relations
 
     # ========================================================

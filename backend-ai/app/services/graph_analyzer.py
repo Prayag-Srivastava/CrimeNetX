@@ -48,43 +48,58 @@ def build_graph(
     """Build a NetworkX directed graph from extracted entities + relations."""
     g = nx.DiGraph()
     meta: dict[str, dict[str, Any]] = {}  # entity_id -> attributes
+    value_index: dict[str, str] = {}
 
     for ent in entities:
-    # Preserve the canonical database Entity ID whenever available.
-    # Only derive an ID for raw entities that do not have one.
-        eid = str(
-            ent.get("id")
-            or f"{ent.get('type', 'ENTITY')}:{ent.get('value', '')}"
+        # Preserve the canonical database Entity ID whenever available.
+        # Only derive an ID for raw entities that do not have one.
+        val = str(ent.get("value") or ent.get("text") or "").strip()
+        etype = str(ent.get("type") or ent.get("label") or "ENTITY").strip().upper()
+        eid = str(ent.get("id") or f"{etype}:{val}")
+        role = ent.get("role")
+        is_victim = bool(ent.get("is_victim") or role == "VICTIM" or "victim" in val.lower())
+        is_witness = bool(ent.get("is_witness") or role == "WITNESS" or "witness" in val.lower())
+        is_police = bool(ent.get("is_police") or role == "POLICE_OFFICER" or "inspector" in val.lower())
+        is_alias = bool(ent.get("is_alias") or role == "ALIAS" or etype == "ALIAS")
+        is_noise = bool(ent.get("is_noise") or is_alias or etype in ("DATE", "LAW_SECTION", "MONEY", "WEAPON", "DRUG", "STOLEN_ITEM"))
+
+        g.add_node(
+            eid,
+            label=val or eid,
+            entity_type=etype,
+            role=role,
+            is_victim=is_victim,
+            is_witness=is_witness,
+            is_police=is_police,
+            is_alias=is_alias,
+            is_noise=is_noise,
         )
 
-        g.add_node(eid)
-
         meta[eid] = {
-            "label": str(ent.get("value", "")),
-            "entity_type": str(ent.get("type", "ENTITY")),
+            "label": val or eid,
+            "entity_type": etype,
             "entity_id": eid,
+            "role": role,
+            "is_victim": is_victim,
+            "is_witness": is_witness,
+            "is_police": is_police,
+            "is_alias": is_alias,
+            "is_noise": is_noise,
         }
 
-    # Value -> node-id index so relations that reference entity *values*
-    # (e.g. LLM output) can be resolved even when ids differ.
-    value_index: dict[str, str] = {}
-    for ent in entities:
-        eid = str(ent.get("id") or f"{ent.get('type', 'ENTITY')}:{ent.get('value', '')}")
-        value_index.setdefault(str(ent["value"]).upper(), eid)
+        if val:
+            value_index.setdefault(val.upper(), eid)
+            value_index.setdefault(val.lower(), eid)
 
     def resolve(ref: str) -> str | None:
         ref = str(ref).strip()
-
-    # First: exact canonical entity ID.
         if ref in g:
             return ref
-
-    # Second: entity value.
-        return value_index.get(ref.upper())
+        return value_index.get(ref.upper()) or value_index.get(ref.lower())
 
     for rel in relations:
         src, tgt = resolve(str(rel["source"])), resolve(str(rel["target"]))
-        if src is None or tgt is None:
+        if src is None or tgt is None or src == tgt:
             continue
         weight = float(rel.get("weight", 1.0))
         # Multi-edges accumulate weight: repeated calls/transfers strengthen the link.
@@ -258,19 +273,47 @@ def analyze(case_id: str, entities: list[dict[str, Any]], relations: list[dict[s
         m = meta.get(nid, {})
         etype_str = str(m.get("entity_type", "PERSON")).upper()
         
-        # Only human suspects (PERSON) can be KINGPIN or BROKER leaders
-        if etype_str == "PERSON":
+        # Non-criminals (victims, witnesses, police officers, aliases, and noise) cannot be syndicate leaders
+        is_non_criminal = bool(
+            m.get("is_victim")
+            or m.get("is_witness")
+            or m.get("is_police")
+            or m.get("is_alias")
+            or m.get("is_noise")
+            or m.get("role") in ("VICTIM", "WITNESS", "POLICE_OFFICER", "ALIAS")
+        )
+
+        if etype_str == "PERSON" and not is_non_criminal:
             assigned_role = s.role if s else GraphRole.EXECUTOR
             kscore = s.composite if s else 0.0
-        else:
+        elif is_non_criminal or etype_str in ("WEAPON", "DRUG", "STOLEN_ITEM", "DATE", "MONEY", "LAW_SECTION"):
             assigned_role = GraphRole.EXECUTOR
             kscore = 0.0
+        else:
+            assigned_role = s.role if s else GraphRole.EXECUTOR
+            kscore = s.composite if s else 0.0
+
+        # Safe mapping to valid EntityType enum member
+        from app.models.schemas import EntityType
+        if etype_str in EntityType.__members__:
+            etype_enum = EntityType[etype_str]
+        elif etype_str in ("MONEY", "FINANCIAL"):
+            etype_enum = EntityType.BANK_ACCOUNT
+        elif etype_str in ("EMAIL", "COMMUNICATION"):
+            etype_enum = EntityType.PHONE
+        elif etype_str in ("STOLEN_ITEM", "WEAPON", "DRUG"):
+            etype_enum = EntityType.ORGANIZATION  # Map evidence items to a neutral type
+        else:
+            etype_enum = EntityType.ORGANIZATION
+
+        # Non-criminal types (evidence items, dates, money) should never be scored
+        is_evidence_item = etype_str in ("WEAPON", "DRUG", "STOLEN_ITEM", "DATE", "MONEY", "LAW_SECTION")
 
         nodes.append(
             GraphNode(
                 id=nid,
                 label=m.get("label", nid),
-                entity_type=m.get("entity_type", "PERSON"),
+                entity_type=etype_enum,
                 kingpin_score=kscore,
                 role=assigned_role,
                 centrality={

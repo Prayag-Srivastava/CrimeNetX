@@ -359,6 +359,9 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
       associate: "associate",
       same_organization: "same_organization",
       co_location: "co_location",
+      co_accused: "co_accused",
+      victim_of: "victim_of",
+      witness_to: "witness_to",
     };
 
     let createdEdges = 0;
@@ -370,13 +373,20 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
       const ensureNode = async (val: string) => {
         let nId = nodeMap.get(normalize(val));
         if (!nId) {
+          const isVic = val.toLowerCase().includes("victim");
+          const isWit = val.toLowerCase().includes("witness");
           const e = await prisma.entity.create({
-            data: { caseId, type: "PERSON", value: val, extractedFrom: "NLP relation", layer: "groq" }
+            data: { caseId, type: "PERSON", value: val, extractedFrom: "NLP relation", layer: "gliner" }
           });
           const n = await prisma.networkNode.create({
             data: {
-              id: e.id, caseId, entityId: e.id, entityType: "PERSON",
-              label: val, role: "EXECUTOR"
+              id: e.id,
+              caseId,
+              entityId: e.id,
+              entityType: "PERSON",
+              label: val,
+              role: "EXECUTOR",
+              personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : "ACCUSED"),
             }
           });
           nId = n.id;
@@ -408,9 +418,9 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
             targetId: targetNodeId,
             relationType: relationType as never,
             weight: relation.weight || 1.0,
-            evidence: relation.evidence || `Extracted by AI from ${source ?? "source"}`,
+            evidence: relation.evidence || `Extracted by GLiNER-relex from ${source ?? "source"}`,
             inkType: "PREDICTED",
-            mechanism: "LLM",
+            mechanism: "GLINER_RELEX",
           },
         });
         createdEdges++;
@@ -458,14 +468,16 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
         };
 
         for (const gNode of graph.nodes ?? []) {
+          const isVic = gNode.label.toLowerCase().includes("victim");
+          const isWit = gNode.label.toLowerCase().includes("witness");
           await prisma.networkNode.updateMany({
             where: {
               caseId,
               label: { equals: gNode.label, mode: "insensitive" },
             },
             data: {
-              kingpinScore: gNode.kingpin_score ?? 0,
-              role: (gNode.role as any) ?? "EXECUTOR",
+              kingpinScore: (isVic || isWit) ? 0 : (gNode.kingpin_score ?? 0),
+              role: (isVic || isWit) ? "EXECUTOR" : (((gNode.role as any) ?? "EXECUTOR")),
               centrality: gNode.centrality ?? {},
             },
           });

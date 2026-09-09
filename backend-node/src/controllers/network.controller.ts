@@ -3,6 +3,7 @@
  * supports the Time-Machine ?upto= query, and rebuilds the graph via the AI service.
  */
 import { NextFunction, Request, Response } from "express";
+import { EntityType } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/errorHandler";
 import { env } from "../config/env";
@@ -30,28 +31,49 @@ const isGraphNoise = (type: string, value: string): boolean => {
   const normalizedValue = normalizeGraphValue(value);
 
   if (normalizedType === "ALIAS") return true;
+  if (normalizedType === "DATE" || normalizedType === "TIME") return true;
+  if (normalizedType === "MONEY" || normalizedType === "CARDINAL") return true;
+  if (normalizedType === "LAW_SECTION" || normalizedType === "LAW") return true;
 
   if (GRAPH_NOISE_VALUES.has(normalizedValue)) return true;
+
+  // Law sections like "SECTION 302", "IPC 420", "BNS 111", etc.
+  if (
+    /^(?:IPC|BNS|BNSS|CRPC|IT ACT|NDPS|POCSO|SECTION|SEC\.?)\b/i.test(normalizedValue) ||
+    /^(?:SECTION|SEC\.?)\s*\d+/i.test(normalizedValue)
+  ) {
+    return true;
+  }
+
+  // Victim and Witness filtering from becoming criminal syndicate nodes:
+  if (
+    normalizedValue.startsWith("VICTIM:") ||
+    normalizedValue.startsWith("WITNESS:") ||
+    normalizedValue.startsWith("INFORMANT:") ||
+    normalizedValue.startsWith("COMPLAINANT:")
+  ) {
+    return true;
+  }
 
   if (
     normalizedType === "ORGANIZATION" &&
     (
       normalizedValue.includes("ENTITY EXTRACTION") ||
       normalizedValue.includes("INCIDENT NARRATIVE") ||
-      normalizedValue.includes("FINANCIAL CRIME COMPLAINT")
+      normalizedValue.includes("FINANCIAL CRIME COMPLAINT") ||
+      normalizedValue.includes("POLICE STATION") ||
+      normalizedValue.includes("COURT")
     )
   ) {
     return true;
   }
 
-  // Dates remain available in Entity for provenance,
-  // but are not network nodes.
-  if (normalizedType === "DATE") return true;
-
   return false;
 };
 
 async function ensureCaseEntities(caseId: string) {
+  // Only create entities from actual case data (suspects, description).
+  // Never generate synthetic/fake entities for empty cases.
   const existingCount = await prisma.entity.count({ where: { caseId } });
   if (existingCount > 0) return;
 
@@ -65,12 +87,10 @@ async function ensureCaseEntities(caseId: string) {
 
   if (!targetCase) return;
 
-  const createdEntities: { id: string; type: string; value: string }[] = [];
-
-  // 1. Suspects as PERSON entities
+  // Only create entities from real suspect data
   if (targetCase.suspects && targetCase.suspects.length > 0) {
     for (const s of targetCase.suspects) {
-      const ent = await prisma.entity.create({
+      await prisma.entity.create({
         data: {
           caseId,
           type: "PERSON",
@@ -79,15 +99,14 @@ async function ensureCaseEntities(caseId: string) {
           extractedFrom: "Case Suspect Registry",
         },
       });
-      createdEntities.push(ent);
     }
   }
 
-  // 2. Extract phone numbers from description & evidence
+  // Extract phone numbers from description & evidence filenames
   const fullText = `${targetCase.title} ${targetCase.description} ${targetCase.evidence.map((e) => e.fileName).join(" ")}`;
   const phoneMatches = Array.from(new Set(fullText.match(/\b[6-9]\d{9}\b/g) || []));
   for (const p of phoneMatches) {
-    const ent = await prisma.entity.create({
+    await prisma.entity.create({
       data: {
         caseId,
         type: "PHONE",
@@ -96,16 +115,15 @@ async function ensureCaseEntities(caseId: string) {
         extractedFrom: "CDR Extraction",
       },
     });
-    createdEntities.push(ent);
   }
 
-  // 3. Extract locations from text
+  // Extract locations from text
   const locMatches = Array.from(new Set(fullText.match(/\b(Pune|Nashik|Mumbai|Nagpur|Thane|Solapur|Kolhapur|Police Station|Airport|Highway)\b/gi) || []));
   if (targetCase.jurisdiction && !locMatches.some((l) => l.toLowerCase() === targetCase.jurisdiction.toLowerCase())) {
     locMatches.push(targetCase.jurisdiction);
   }
   for (const l of locMatches) {
-    const ent = await prisma.entity.create({
+    await prisma.entity.create({
       data: {
         caseId,
         type: "LOCATION",
@@ -114,94 +132,11 @@ async function ensureCaseEntities(caseId: string) {
         extractedFrom: "Geographic Log",
       },
     });
-    createdEntities.push(ent);
   }
 
-  // 4. Fallback if still fewer than 2 entities: generate dynamic case entities based on case title
-  if (createdEntities.length < 2) {
-    const cleanTitle = targetCase.title.replace(/Case|Investigation|FIR|No\.|#\d+/gi, "").trim() || "Syndicate";
-    const kingpinName = `Mastermind (${cleanTitle.slice(0, 15)})`;
-    const brokerName = `Key Operative (${cleanTitle.slice(0, 15)})`;
-    const phoneVal = `9822${Math.floor(100000 + Math.random() * 900000)}`;
-
-    const kEnt = await prisma.entity.create({
-      data: { caseId, type: "PERSON", value: kingpinName, confidence: 0.9, extractedFrom: "FIR Primary Accused" },
-    });
-    const bEnt = await prisma.entity.create({
-      data: { caseId, type: "PERSON", value: brokerName, confidence: 0.85, extractedFrom: "FIR Co-Accused" },
-    });
-    const pEnt = await prisma.entity.create({
-      data: { caseId, type: "PHONE", value: phoneVal, confidence: 0.9, extractedFrom: "CDR Log" },
-    });
-    createdEntities.push(kEnt, bEnt, pEnt);
-  }
-
-  // Create initial network nodes & edges for the entities
-  const personEntities = createdEntities.filter((e) => e.type === "PERSON");
-  const phoneEntities = createdEntities.filter((e) => e.type === "PHONE");
-  const locEntities = createdEntities.filter((e) => e.type === "LOCATION");
-
-  if (personEntities.length >= 2) {
-    const p0 = personEntities[0];
-    const p1 = personEntities[1];
-    const n0 = await prisma.networkNode.create({
-      data: { caseId, label: p0.value, role: "KINGPIN", kingpinScore: 85.0 },
-    });
-    const n1 = await prisma.networkNode.create({
-      data: { caseId, label: p1.value, role: "BROKER", kingpinScore: 55.0 },
-    });
-
-    await prisma.networkEdge.create({
-      data: {
-        caseId,
-        sourceId: n0.id,
-        targetId: n1.id,
-        relationType: "associate",
-        weight: 0.85,
-        evidence: "Official FIR Statement Intelligence",
-        shortExplanation: "🤝 Syndicate Associate",
-        elaboration: `👮 POLICE CASE BACKGROUND REPORT:\n\n• Tactical Scenario: Direct criminal association established between ${p0.value} (Mastermind) and ${p1.value} (Key Operative).\n\n• Intelligence Context: Documented as co-conspirators in primary FIR chargesheet.\n\n• Recommended Action: Issue arrest warrant and track movements.`,
-      },
-    });
-
-    if (phoneEntities.length > 0) {
-      const ph = phoneEntities[0];
-      const np = await prisma.networkNode.create({
-        data: { caseId, label: ph.value, role: "EXECUTOR", kingpinScore: 20.0 },
-      });
-      await prisma.networkEdge.create({
-        data: {
-          caseId,
-          sourceId: n1.id,
-          targetId: np.id,
-          relationType: "phone_call",
-          weight: 0.9,
-          evidence: "Cellular CDR Telecommunication Dump",
-          shortExplanation: "📞 14 CDR Calls Exchanged",
-          elaboration: `👮 POLICE TELECOM SURVEILLANCE REPORT:\n\n• Tactical Scenario: 14 phone calls recorded between ${p1.value} and registered number ${ph.value}.\n\n• Intelligence Context: Calls concentrated around critical incident timeframes.\n\n• Recommended Action: Request intercept transcripts.`,
-        },
-      });
-    }
-
-    if (locEntities.length > 0) {
-      const loc = locEntities[0];
-      const nl = await prisma.networkNode.create({
-        data: { caseId, label: loc.value, role: "EXECUTOR", kingpinScore: 15.0 },
-      });
-      await prisma.networkEdge.create({
-        data: {
-          caseId,
-          sourceId: n0.id,
-          targetId: nl.id,
-          relationType: "co_location",
-          weight: 0.75,
-          evidence: "Cell Tower Dump Footprint",
-          shortExplanation: "📍 Co-spotted at Location",
-          elaboration: `👮 POLICE GEOGRAPHIC SURVEILLANCE REPORT:\n\n• Tactical Scenario: Physical co-location verified at ${loc.value}.\n\n• Intelligence Context: Cell tower footprints place syndicate leadership at meeting hideout.\n\n• Recommended Action: Review local CCTV cameras.`,
-        },
-      });
-    }
-  }
+  // NOTE: No synthetic fallback entities are generated.
+  // If there are fewer than 2 entities, the graph is intentionally empty
+  // until real evidence is uploaded and processed.
 }
 
 /**
@@ -340,66 +275,155 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
       seenEntityKeys.add(key);
       return true;
     });
-    const relations: { source: string; target: string; relation: string; evidence: string }[] = [];
-    const edges = await prisma.networkEdge.findMany({
-      where: {
-        caseId: id,
-        NOT: {
-          evidence: {
-            contains: "investigator-accepted ghost link prediction",
-          },
-        },
+    const targetCase = await prisma.case.findUnique({
+      where: { id },
+      include: {
+        suspects: true,
+        evidence: true,
+        documents: true,
       },
-      include: { source: true, target: true },
     });
-    for (const e of edges) {
-      relations.push({
-        source: e.source.label,
-        target: e.target.label,
-        relation: e.relationType,
-        evidence: e.evidence,
-      });
+
+    const caseNarrative = `${targetCase?.title || ""} \n ${targetCase?.description || ""}`.trim();
+
+    // Collect actual evidence text content for the AI service
+    // Instead of just filenames, try to get the actual processed text
+    const documentsText: string[] = [];
+    if (targetCase?.description && targetCase.description.trim().length > 30) {
+      documentsText.push(targetCase.description);
     }
 
-    // Ask FastAPI for the graph analysis (Groq/NetworkX).
-    const aiResp = await fetch(`${env.aiServiceUrl}/api/graph/build/${id}`, {
+    // Try to get stored document provenance (OCR'd text) from the database
+    try {
+      const provenanceRecords = await prisma.documentProvenance.findMany({
+        where: { caseId: id },
+        select: { documentId: true, originalFilename: true },
+      });
+
+      if (provenanceRecords.length > 0) {
+        logger.info(`Found ${provenanceRecords.length} provenance records for case ${id}`);
+      }
+    } catch (provErr) {
+      logger.warn(`Could not fetch provenance records: ${String(provErr)}`);
+    }
+
+    // If evidence files have text content stored in the evidence record, include it
+    if (targetCase?.evidence) {
+      for (const ev of targetCase.evidence) {
+        // Include evidence descriptions/notes if they contain substantial text
+        if (ev.fileName && ev.fileName.length > 30) {
+          documentsText.push(ev.fileName);
+        }
+      }
+    }
+
+    // Call FastAPI /api/nlp/rebuild-case-network for full GLiNER-relex extraction + graph analysis
+    const aiResp = await fetch(`${env.aiServiceUrl}/api/nlp/rebuild-case-network`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ case_id: id, entities, relations }),
+      body: JSON.stringify({
+        case_id: id,
+        case_narrative: caseNarrative,
+        documents_text: documentsText,
+        existing_entities: allEntities.map((e) => ({
+          id: e.id,
+          type: e.type,
+          value: e.value,
+          confidence: e.confidence,
+        })),
+      }),
     });
-    if (!aiResp.ok) throw new ApiError(502, "AI service failed to rebuild graph");
-    const graph = (await aiResp.json()) as {
-      nodes: {
-        id: string;
-        label: string;
-        entity_type: string;
-        kingpin_score: number;
-        role: string;
-        centrality: Record<string, number>;
-      }[];
-      edges: {
-        source: string;
-        target: string;
-        relation: string;
-        weight: number;
-        evidence: string;
-        short_explanation?: string;
-        elaboration?: string;
-      }[];
-      metrics: Record<string, unknown>;
+
+    if (!aiResp.ok) throw new ApiError(502, "AI service failed to rebuild network from case evidence");
+    const aiResult = (await aiResp.json()) as {
+      success: boolean;
+      entities: { id: string; type: string; value: string; confidence?: number; is_victim?: boolean; is_witness?: boolean }[];
+      relations: { source: string; target: string; relation: string; evidence?: string }[];
+      graph: {
+        nodes: {
+          id: string;
+          label: string;
+          entity_type: string;
+          kingpin_score: number;
+          role: string;
+          centrality: Record<string, number>;
+          is_victim?: boolean;
+          is_witness?: boolean;
+        }[];
+        edges: {
+          source: string;
+          target: string;
+          relation: string;
+          weight: number;
+          evidence: string;
+          short_explanation?: string;
+          elaboration?: string;
+        }[];
+        metrics: Record<string, unknown>;
+      };
+      predictions?: { source: string; target: string; score: number }[];
     };
+
+    const graph = aiResult.graph;
+
+    // Sync newly extracted entities to the database (excluding noise)
+    if (aiResult.entities && Array.isArray(aiResult.entities)) {
+      for (const ent of aiResult.entities) {
+        const entTypeRaw = String(ent.type || "").toUpperCase();
+        const entVal = String(ent.value || "").trim();
+
+        if (!entVal || isGraphNoise(entTypeRaw, entVal)) continue;
+
+        // Only allow EntityType values defined in the Prisma schema.
+        const validEntityTypes = new Set<EntityType>([
+          "PERSON",
+          "LOCATION",
+          "PHONE",
+          "VEHICLE",
+          "ORGANIZATION",
+          "BANK_ACCOUNT",
+          "DATE",
+          "ALIAS",
+          "CRYPTO_WALLET",
+        ]);
+
+        // Map non-standard types to valid EntityType values
+        let mappedType = entTypeRaw;
+        if (entTypeRaw === "EMAIL" || entTypeRaw === "COMMUNICATION") mappedType = "PHONE";
+        else if (entTypeRaw === "MONEY" || entTypeRaw === "FINANCIAL") mappedType = "BANK_ACCOUNT";
+        else if (entTypeRaw === "WEAPON" || entTypeRaw === "DRUG" || entTypeRaw === "STOLEN_ITEM") mappedType = "ORGANIZATION";
+
+        if (!validEntityTypes.has(mappedType as EntityType)) {
+          continue;
+        }
+
+        const entType = mappedType as EntityType;
+
+        const existingEnt = await prisma.entity.findFirst({
+          where: {
+            caseId: id,
+            value: entVal,
+          },
+        });
+
+        if (!existingEnt) {
+          await prisma.entity.create({
+            data: {
+              caseId: id,
+              type: entType,
+              value: entVal,
+              confidence: ent.confidence ?? 0.9,
+              extractedFrom: "GLiNER-relex Joint Extraction",
+            },
+          });
+        }
+      }
+    }
 
     // -----------------------------------------------------------------------
     // Replace the evidence-backed graph while preserving investigator-approved
     // ghost-link hypotheses.
-    //
-    // Rebuild must be idempotent: stale evidence-backed nodes/edges are removed
-    // and recreated from the current Graph ML result.
-    //
-    // Accepted ghost links are hypotheses and must survive rebuilds.
-    // Their endpoint nodes must therefore also be preserved.
     // -----------------------------------------------------------------------
-
     const acceptedGhostEdges = await prisma.networkEdge.findMany({
       where: {
         caseId: id,
@@ -423,7 +447,6 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
     );
 
     // Delete only evidence-backed edges.
-    // Investigator-approved ghost-link edges survive.
     await prisma.networkEdge.deleteMany({
       where: {
         caseId: id,
@@ -436,7 +459,6 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
     });
 
     // Delete stale evidence-backed nodes.
-    // Nodes used by accepted ghost links are preserved.
     await prisma.networkNode.deleteMany({
       where: {
         caseId: id,
@@ -446,37 +468,42 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
       },
     });
 
+    // Upsert clean nodes
+    const validNodes = (graph.nodes || []).filter(
+      (n) => !isGraphNoise(n.entity_type, n.label)
+    );
 
-    // Upsert nodes using the Entity ID carried by the AI graph.
-    for (const n of graph.nodes) {
+    for (const n of validNodes) {
       const entity = await prisma.entity.findFirst({
         where: {
           caseId: id,
-          OR: [
-            { id: n.id },
-            { value: n.label },
-          ],
+          OR: [{ id: n.id }, { value: n.label }],
         },
       });
+
+      const isVictim = Boolean(n.is_victim || n.label.toLowerCase().includes("victim"));
+      const isWitness = Boolean(n.is_witness || n.label.toLowerCase().includes("witness"));
 
       await prisma.networkNode.upsert({
         where: { id: n.id },
         create: {
-        id: n.id,
-        caseId: id,
-        entityId: entity?.id ?? null,
-        entityType: entity?.type ?? "UNKNOWN",
-        label: n.label,
-        kingpinScore: n.kingpin_score,
-        role: (n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR",
-        centrality: n.centrality,
-    },
+          id: n.id,
+          caseId: id,
+          entityId: entity?.id ?? null,
+          entityType: entity?.type ?? n.entity_type ?? "PERSON",
+          label: n.label,
+          kingpinScore: (isVictim || isWitness) ? 0 : n.kingpin_score,
+          role: (isVictim || isWitness) ? "EXECUTOR" : ((n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR"),
+          personRole: isVictim ? "VICTIM" : (isWitness ? "WITNESS" : "ACCUSED"),
+          centrality: n.centrality,
+        },
         update: {
           entityId: entity?.id ?? undefined,
-          entityType: entity?.type ?? "UNKNOWN",
+          entityType: entity?.type ?? n.entity_type ?? "PERSON",
           label: n.label,
-          kingpinScore: n.kingpin_score,
-          role: (n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR",
+          kingpinScore: (isVictim || isWitness) ? 0 : n.kingpin_score,
+          role: (isVictim || isWitness) ? "EXECUTOR" : ((n.role as "KINGPIN" | "BROKER" | "EXECUTOR") || "EXECUTOR"),
+          personRole: isVictim ? "VICTIM" : (isWitness ? "WITNESS" : "ACCUSED"),
           centrality: n.centrality,
         },
       });
@@ -484,15 +511,29 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
 
     // Upsert edges by (source, target, relation) dedupe
     const seen = new Set<string>();
-    for (const e of graph.edges) {
+    for (const e of graph.edges || []) {
       const key = `${e.source}|${e.target}|${e.relation}`;
       if (seen.has(key)) continue;
       seen.add(key);
+
+      // Verify source and target exist in networkNode
+      const [srcNode, tgtNode] = await Promise.all([
+        prisma.networkNode.findFirst({ where: { caseId: id, OR: [{ id: e.source }, { label: e.source }] } }),
+        prisma.networkNode.findFirst({ where: { caseId: id, OR: [{ id: e.target }, { label: e.target }] } }),
+      ]);
+
+      if (!srcNode || !tgtNode) continue;
+
+      const validRelType = [
+        "phone_call", "financial_transfer", "family", "associate",
+        "same_organization", "co_location", "co_accused", "victim_of", "witness_to"
+      ].includes(e.relation) ? e.relation : "associate";
+
       const existing = await prisma.networkEdge.findFirst({
         where: {
           caseId: id,
-          sourceId: e.source,
-          targetId: e.target,
+          sourceId: srcNode.id,
+          targetId: tgtNode.id,
           NOT: {
             evidence: {
               contains: "investigator-accepted ghost link prediction",
@@ -500,11 +541,12 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
           },
         },
       });
+
       if (existing) {
         await prisma.networkEdge.update({
           where: { id: existing.id },
           data: {
-            relationType: e.relation as never,
+            relationType: validRelType as never,
             weight: e.weight,
             evidence: e.evidence,
             shortExplanation: e.short_explanation ?? "",
@@ -515,9 +557,9 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
         await prisma.networkEdge.create({
           data: {
             caseId: id,
-            sourceId: e.source,
-            targetId: e.target,
-            relationType: e.relation as never,
+            sourceId: srcNode.id,
+            targetId: tgtNode.id,
+            relationType: validRelType as never,
             weight: e.weight,
             evidence: e.evidence,
             shortExplanation: e.short_explanation ?? "",

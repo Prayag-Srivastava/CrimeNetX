@@ -286,16 +286,14 @@ class ForensicPipeline:
         #     result.stage_errors.append(f"Stage 5 error: {e}")
         #     result.relationships = []
 
-        # # ---- Finalize ----
-        # result.processing_time_seconds = round(time.time() - start_time, 2)
-        # result.success = len(result.stage_errors) == 0 or len(result.entities) > 0
+        # ---- Finalize ----
+        result.processing_time_seconds = round(time.time() - start_time, 2)
+        result.success = len(result.stage_errors) == 0 or len(result.entities) > 0
 
-        # logger.info(
-        #     f"=== Pipeline complete in {result.processing_time_seconds}s | "
-        #     f"success={result.success} | entities={len(result.entities)} | "
-        #     f"relations={len(result.relationships)} | errors={len(result.stage_errors)} ==="
-        # )
-
-        
+        logger.info(
+            f"=== Pipeline complete in {result.processing_time_seconds}s | "
+            f"success={result.success} | entities={len(result.entities)} | "
+            f"relations={len(result.relationships)} | errors={len(result.stage_errors)} ==="
+        )
 
         return result

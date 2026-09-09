@@ -1,0 +1,29 @@
+{
+  "document_id": "cmtujwcas00fbivuek6shh8ee_c7094928",
+  "case_id": "cmtujwcas00fbivuek6shh8ee",
+  "original_filename": "tmp42a7eq2r.pdf",
+  "original_file_hash": "a7ca9c7af5bacf4dee92c065191997abb3f11063c60a3e85f59178ea651b71f7",
+  "pipeline_version": "v2.2-ocr-indictrans-gliner-relex-splink",
+  "stages": {
+    "ocr": {
+      "raw_text_hash": "d3b1ef018e2cf738e49203050c405ff8b5373b6efb3487ba57515b6ce9da5e72",
+      "language": "eng+hin",
+      "confidence": 88.06,
+      "raw_text_file": "data/raw_texts/cmtujwcas00fbivuek6shh8ee/cmtujwcas00fbivuek6shh8ee_c7094928_raw.txt"
+    },
+    "translation": {
+      "translated_text_hash": "b3ae93021e38558707338351e9b3cdfadf65450e3507adca7f637da70db37583",
+      "source_language": "hi",
+      "model": "ai4bharat/indictrans2-indic-en-dist-200M",
+      "translated_text_file": "data/raw_texts/cmtujwcas00fbivuek6shh8ee/cmtujwcas00fbivuek6shh8ee_c7094928_translated.txt"
+    }
+  },
+  "hash_chain": {
+    "step_1_original_file": "a7ca9c7af5bacf4dee92c065191997abb3f11063c60a3e85f59178ea651b71f7",
+    "step_2_ocr_text": "d3b1ef018e2cf738e49203050c405ff8b5373b6efb3487ba57515b6ce9da5e72",
+    "step_3_translated_text": "b3ae93021e38558707338351e9b3cdfadf65450e3507adca7f637da70db37583"
+  },
+  "timestamps": {
+    "ingested_at": "2026-09-09T20:31:47.331924+00:00"
+  }
+}
