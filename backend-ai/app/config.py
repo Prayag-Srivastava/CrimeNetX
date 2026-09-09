@@ -159,6 +159,38 @@ class Settings(BaseSettings):
         "en_core_web_sm",
     )
 
+    # ---- GLiNER (primary NER; spaCy is the last-resort fallback) ----------
+
+    GLINER_MODEL: str = os.getenv("GLINER_MODEL", "urchade/gliner_medium-v2.1")
+    GLINER_THRESHOLD: float = float(os.getenv("GLINER_THRESHOLD", "0.4"))
+    USE_GLINER: bool = os.getenv("USE_GLINER", "true").lower() in ("1", "true", "yes")
+
+    # ---- GLiNER-relex: joint NER + relation extraction (primary) ----------
+
+    GLINER_RELEX_MODEL: str = os.getenv(
+        "GLINER_RELEX_MODEL",
+        "knowledgator/gliner-relex-large-v0.5",
+    )
+    USE_GLINER_RELEX: bool = os.getenv("USE_GLINER_RELEX", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    RELEX_ENTITY_THRESHOLD: float = float(os.getenv("RELEX_ENTITY_THRESHOLD", "0.4"))
+    # Above ~0.5 the adjacency gate rejects every candidate pair before the
+    # relation head ever scores it, so relation extraction returns nothing at
+    # all. Measured against sakshya_fir_if1_v5 ground truth: 0.55 -> 0/11
+    # relations, 0.35 -> 11/11, entities unchanged at 16/16.
+    RELEX_ADJACENCY_THRESHOLD: float = float(
+        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.35")
+    )
+    RELEX_RELATION_THRESHOLD: float = float(
+        os.getenv("RELEX_RELATION_THRESHOLD", "0.75")
+    )
+    GROQ_RELATION_FALLBACK: bool = os.getenv(
+        "GROQ_RELATION_FALLBACK", "false"
+    ).lower() in ("1", "true", "yes")
+
     # -----------------------------------------------------------------------
     # Stage 4 — Entity Resolution / Splink
     # -----------------------------------------------------------------------
@@ -221,6 +253,17 @@ TRANSLATION_MAX_LENGTH = settings.TRANSLATION_MAX_LENGTH
 TRANSLATION_BATCH_SIZE = settings.TRANSLATION_BATCH_SIZE
 
 SPACY_MODEL = settings.SPACY_MODEL
+
+GLINER_MODEL = settings.GLINER_MODEL
+GLINER_THRESHOLD = settings.GLINER_THRESHOLD
+USE_GLINER = settings.USE_GLINER
+
+GLINER_RELEX_MODEL = settings.GLINER_RELEX_MODEL
+USE_GLINER_RELEX = settings.USE_GLINER_RELEX
+RELEX_ENTITY_THRESHOLD = settings.RELEX_ENTITY_THRESHOLD
+RELEX_ADJACENCY_THRESHOLD = settings.RELEX_ADJACENCY_THRESHOLD
+RELEX_RELATION_THRESHOLD = settings.RELEX_RELATION_THRESHOLD
+GROQ_RELATION_FALLBACK = settings.GROQ_RELATION_FALLBACK
 
 SPLINK_MATCH_THRESHOLD = settings.SPLINK_MATCH_THRESHOLD
 SPLINK_REVIEW_THRESHOLD = settings.SPLINK_REVIEW_THRESHOLD
