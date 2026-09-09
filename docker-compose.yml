@@ -1,139 +1,254 @@
 # ============================================================================
-# CrimeNetX — Docker Compose (SIH26189)
-# Spins up: PostgreSQL 16, Redis 7, ChromaDB, backend-node, backend-ai, frontend
-# Usage:  docker compose up --build
+# CrimeNetX — Docker Compose (Development)
+# PostgreSQL 16 + Redis 7 + ChromaDB + Node + FastAPI AI + Next.js
+#
+# First time / dependency changes:
+#   docker compose build
+#
+# Normal development:
+#   docker compose up -d
+#
+# Code changes:
+#   No Docker rebuild required.
 # ============================================================================
-version: "3.9"
 
 services:
-  # ---------------------------------------------------------------- database
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL
+  # --------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: crimenetx-postgres
     restart: unless-stopped
+
     environment:
       POSTGRES_USER: crimenetx
       POSTGRES_PASSWORD: crimenetx
       POSTGRES_DB: crimenetx
+
     ports:
       - "5432:5432"
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U crimenetx -d crimenetx"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # ---------------------------------------------------------------- cache
+
+  # --------------------------------------------------------------------------
+  # Redis
+  # --------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: crimenetx-redis
     restart: unless-stopped
+
     ports:
       - "6379:6379"
+
     volumes:
       - redis_data:/data
-    command: ["redis-server", "--appendonly", "yes"]
+
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # ------------------------------------------------------------ vector store
+
+  # --------------------------------------------------------------------------
+  # ChromaDB
+  # --------------------------------------------------------------------------
   chromadb:
     image: chromadb/chroma:latest
     container_name: crimenetx-chromadb
     restart: unless-stopped
+
     ports:
-      - "8001:8000"   # host 8001 to avoid clash with FastAPI on 8000
+      - "8001:8000"
+
     volumes:
       - chroma_data:/data
+
     environment:
       IS_PERSISTENT: "TRUE"
       PERSIST_DIRECTORY: /data
       ANONYMIZED_TELEMETRY: "FALSE"
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8000/api/v2/heartbeat"
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
 
-  # ------------------------------------------------------- Node REST + WS API
+
+  # --------------------------------------------------------------------------
+  # Node REST + WebSocket API
+  # --------------------------------------------------------------------------
   backend-node:
     build:
       context: ./backend-node
       dockerfile: Dockerfile
+
     container_name: crimenetx-backend-node
     restart: unless-stopped
+
     ports:
       - "5000:5000"
+
     env_file:
       - ./backend-node/.env
+
     environment:
       DATABASE_URL: postgresql://neondb_owner:npg_W3VaxoY5rbNg@ep-plain-poetry-azioxp85-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
       REDIS_URL: redis://redis:6379
       AI_SERVICE_URL: http://backend-ai:8000
+      NODE_ENV: development
+
     depends_on:
       postgres:
         condition: service_healthy
+
       redis:
         condition: service_healthy
-    volumes:
-      - evidence_uploads:/app/uploads
-    command: sh -c "npx prisma migrate deploy && npm run start"
 
-  # --------------------------------------------------------- FastAPI AI/ML API
+    volumes:
+      # Live source code
+      - ./backend-node:/app
+
+      # Keep Linux node_modules inside Docker
+      - backend_node_modules:/app/node_modules
+
+    command: npm run dev
+
+
+  # --------------------------------------------------------------------------
+  # FastAPI AI / ML API
+  # --------------------------------------------------------------------------
   backend-ai:
     build:
       context: ./backend-ai
+      dockerfile: Dockerfile
       args:
         HF_TOKEN: ${HF_TOKEN}
-      dockerfile: Dockerfile
-      secrets:
-        - hf_token
+
     container_name: crimenetx-backend-ai
     restart: unless-stopped
+
     ports:
       - "8000:8000"
+
     env_file:
       - ./backend-ai/.env
+
     environment:
       DATABASE_URL: postgresql://neondb_owner:npg_W3VaxoY5rbNg@ep-plain-poetry-azioxp85-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
       REDIS_URL: redis://redis:6379
       NODE_BACKEND_URL: http://backend-node:5000
       CHROMA_PERSIST_DIR: /data/chroma
+
     depends_on:
       postgres:
         condition: service_healthy
+
       redis:
         condition: service_healthy
+
     volumes:
+      # Live Python source code
+      - ./backend-ai:/app
+
+      # Persistent application data
       - chroma_data:/data/chroma
       - evidence_uploads:/app/evidence
-    
 
-  # ---------------------------------------------------------------- frontend
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+
+    secrets:
+      - hf_token
+
+
+  # --------------------------------------------------------------------------
+  # Next.js Frontend
+  # --------------------------------------------------------------------------
   frontend:
     build:
       context: .
-      dockerfile: ./frontend/Dockerfile
+      dockerfile: ./frontend/Dockerfile.dev
+
     container_name: crimenetx-frontend
     restart: unless-stopped
+
     ports:
       - "3000:3000"
+
     env_file:
       - ./frontend/.env.local
+
+    environment:
+      NODE_ENV: development
+
     depends_on:
       - backend-node
       - backend-ai
+
+    volumes:
+      # Live frontend source
+      - ./frontend:/app
+
+      # Shared code
+      - ./shared:/shared
+
+      # Keep Linux node_modules inside Docker
+      - frontend_node_modules:/app/node_modules
+
+      # Next.js cache
+      - frontend_next:/app/.next
+
+    command: npm run dev
+
+
+# ============================================================================
+# Persistent volumes
+# ============================================================================
 
 volumes:
   postgres_data:
   redis_data:
   chroma_data:
   evidence_uploads:
+
+  backend_node_modules:
+  frontend_node_modules:
+  frontend_next:
+
+
+# ============================================================================
+# Secrets
+# ============================================================================
 
 secrets:
   hf_token:

@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     )
     RELEX_ENTITY_THRESHOLD: float = float(os.getenv("RELEX_ENTITY_THRESHOLD", "0.4"))
     RELEX_ADJACENCY_THRESHOLD: float = float(
-        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.55")
+        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.35")
     )
     RELEX_RELATION_THRESHOLD: float = float(
         os.getenv("RELEX_RELATION_THRESHOLD", "0.75")
