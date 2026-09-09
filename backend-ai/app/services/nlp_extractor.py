@@ -255,6 +255,114 @@ _SPACY_LAYER_LABELS = {
 }
 
 
+# ============================================================
+# Person-name validation
+# ------------------------------------------------------------
+# Every FIR names a police station, a duty officer and their rank, and uses
+# role words ("accused", "complainant") as if they were names. NER labels all
+# of it PERSON. Left unfiltered they become nodes on the criminal network and
+# distort centrality, so clean the honorifics/ranks off a name and reject
+# anything that is not plausibly a person.
+# ============================================================
+
+_TITLE_PREFIXES = (
+    "shri", "shree", "smt", "sri", "mr", "mrs", "ms", "dr", "shri.",
+    "accused", "complainant", "witness", "informant", "the", "one",
+    "si", "psi", "asi", "pi", "acp", "dcp", "sp", "dsp", "constable",
+)
+
+_PERSON_STOPWORDS = {
+    "police", "station", "court", "fir", "ipc", "bns", "crpc", "bnss",
+    "section", "act", "state", "india", "government", "district",
+    "complaint", "accused", "unknown", "sir", "madam", "officer",
+}
+
+# Tokens that never occur inside a real person's name. One occurrence
+# anywhere disqualifies the whole string - "Hinjewadi Police Station" holds a
+# genuine place name but is a building, and "Assistant Sub-Inspector" is a
+# rank. Checking every token (rather than requiring all of them to match)
+# is what separates this from the original all-token rule.
+_PERSON_HARD_STOPWORDS = {
+    # places of record
+    "police", "station", "thana", "chowky", "court", "department",
+    # document / statute furniture
+    "fir", "gd", "ipc", "bns", "crpc", "bnss", "section", "act",
+    "report", "information", "complaint", "government", "cctv",
+    # ranks and roles
+    "inspector", "constable", "havaldar", "superintendent",
+    "commissioner", "officer", "assistant", "asst", "sub",
+}
+
+
+def _name_tokens(name: str) -> list[str]:
+    """Lowercase alphabetic tokens, splitting on punctuation so that
+    'Sub-Inspector' and '(FIR)' are seen as their constituent words."""
+    return [t for t in re.split(r"[^A-Za-z]+", name or "") if t]
+
+
+# ============================================================
+# Groq model fallback
+# ------------------------------------------------------------
+# Groq deprecates and rotates model IDs regularly. A single hardcoded name
+# means one deprecation silently disables relation extraction, so try a chain
+# and remember whichever answers.
+# ============================================================
+
+_GROQ_MODEL_CHAIN = [
+    "openai/gpt-oss-120b",    # recommended, JSON mode
+    "openai/gpt-oss-20b",     # faster / cheaper fallback
+    "qwen/qwen3.6-27b",       # alternate
+    "groq/compound-mini",     # last resort
+]
+
+# First model that answered; avoids re-probing the chain on every call.
+_WORKING_GROQ_MODEL: Optional[str] = None
+
+
+def _groq_model_candidates() -> list[str]:
+    """Chain to try, honouring an explicitly pinned GROQ_MODEL first."""
+    import os
+
+    pinned = (os.getenv("GROQ_MODEL", "") or "").strip()
+    if pinned:
+        return [pinned] + [m for m in _GROQ_MODEL_CHAIN if m != pinned]
+    return list(_GROQ_MODEL_CHAIN)
+
+
+def _clean_person_name(raw: str) -> str:
+    """Strip honorifics and role/rank words, normalise whitespace."""
+    txt = re.sub(r"\s+", " ", raw or "").strip(" .,:;-\"'()")
+    if not txt:
+        return ""
+    tokens = txt.split()
+    while tokens and tokens[0].lower().strip(".") in _TITLE_PREFIXES:
+        tokens.pop(0)
+    return " ".join(tokens).strip(" .,:;-")
+
+
+def _is_valid_person(name: str) -> bool:
+    """Reject role words, station/court names, ranks with numbers, and
+    descriptive phrases like 'three masked persons on two motorcycles'."""
+    if not name or len(name) < 3 or len(name) > 60:
+        return False
+    if contains_indic(name):              # untranslated text leaked through
+        return False
+    if any(ch.isdigit() for ch in name):  # "SI 2908" is a badge, not a name
+        return False
+    if name.lower() in _PERSON_STOPWORDS:
+        return False
+    # one administrative token anywhere is enough to disqualify
+    if any(t.lower() in _PERSON_HARD_STOPWORDS for t in _name_tokens(name)):
+        return False
+    tokens = [t for t in name.split() if t]
+    if not tokens or len(tokens) > 5:
+        return False
+    if all(t.lower() in _PERSON_STOPWORDS for t in tokens):
+        return False
+    # a real name has at least one capitalised alphabetic token
+    return any(t[0].isupper() and t.isalpha() for t in tokens)
+
+
 class LlmRelation(BaseModel):
     source: str = Field(min_length=1)
     target: str = Field(min_length=1)
@@ -283,6 +391,8 @@ class NLPExtractor:
         self._relex_model = None
         self._gliner_model = None
         self._spacy_nlp = None
+        self._detector = None
+        self._translator = None
         self._extraction_engine = "none"
 
         self._phone_pattern = re.compile(
@@ -377,16 +487,13 @@ class NLPExtractor:
             return text
 
         try:
-            from app.services.language_detector import LanguageDetector
-            from app.services.translator import TranslatorService
-
-            detection = LanguageDetector().detect(text)
+            detection = self._get_detector().detect(text)
             logger.warning(
                 "ensure_english(): non-Latin text reached NER "
                 f"(indic_ratio={indic_ratio(text):.2f}, lang={detection.language}). "
                 "Translating inline; the caller should ideally translate upstream."
             )
-            result = TranslatorService().translate(
+            result = self._get_translator().translate(
                 text,
                 source_lang=detection.language,
                 source_indictrans_code=detection.indictrans_code,
@@ -395,6 +502,20 @@ class NLPExtractor:
         except Exception as exc:
             logger.warning(f"ensure_english(): translation unavailable ({exc})")
             return text
+
+    def _get_detector(self):
+        """Cached - langdetect setup is not free and this runs per document."""
+        if getattr(self, "_detector", None) is None:
+            from app.services.language_detector import LanguageDetector
+            self._detector = LanguageDetector()
+        return self._detector
+
+    def _get_translator(self):
+        """Cached - IndicTrans2 loads a model, so never construct per call."""
+        if getattr(self, "_translator", None) is None:
+            from app.services.translator import TranslatorService
+            self._translator = TranslatorService()
+        return self._translator
 
     def extract_entities_with_spans(
         self, text: str, already_english: bool = False
@@ -423,6 +544,36 @@ class NLPExtractor:
         )
         return entities
 
+    @staticmethod
+    def _clean_person_entities(entities: list[dict]) -> list[dict]:
+        """Clean and validate PERSON entities; other labels pass through.
+
+        Runs after every engine so GLiNER, plain GLiNER and the spaCy fallback
+        all get the same treatment. Dropped names are logged at debug level so
+        the filter can be audited rather than silently swallowing evidence.
+        """
+        kept: list[dict] = []
+        dropped: list[str] = []
+
+        for ent in entities:
+            if str(ent.get("label", "")).upper() != "PERSON":
+                kept.append(ent)
+                continue
+
+            original = str(ent.get("text", ""))
+            cleaned = _clean_person_name(original)
+            if not _is_valid_person(cleaned):
+                dropped.append(original)
+                continue
+
+            if cleaned != original:
+                ent = {**ent, "text": cleaned, "original_text": original}
+            kept.append(ent)
+
+        if dropped:
+            logger.debug(f"person filter dropped {len(dropped)}: {dropped[:8]}")
+        return kept
+
     # ========================================================
     # PUBLIC: relations
     # ========================================================
@@ -440,6 +591,7 @@ class NLPExtractor:
         if self._extraction_engine == "gliner-relex" and self._relex_model:
             _, relations = self._relex_joint(text, want_relations=True)
             if relations:
+                relations = self._align_to_known(relations, known_entities)
                 logger.info(f"GLiNER-relex extracted {len(relations)} relations")
                 return relations
 
@@ -447,11 +599,57 @@ class NLPExtractor:
             try:
                 relations = self._llm_layer(text, known_entities)
                 if relations:
-                    return relations
+                    return self._align_to_known(relations, known_entities)
             except Exception as e:
                 logger.warning(f"Groq relationship extraction failed: {e}")
 
-        return self._cooccurrence_relations(text)
+        return self._align_to_known(
+            self._cooccurrence_relations(text), known_entities
+        )
+
+    @staticmethod
+    def _align_to_known(
+        relations: list[dict], known: Optional[list[str]]
+    ) -> list[dict]:
+        """Snap relation endpoints onto the canonical entity list.
+
+        Extraction returns whatever surface form appeared in the text, so the
+        same real thing arrives as several strings - "Rs. 153000" and
+        "Rs. 153000/-", or a full name and a partial one. Left alone each
+        variant becomes its own graph node and the same fact is drawn twice.
+        Snapping to the known-entity list collapses them onto one node.
+        """
+        if not known:
+            return relations
+
+        lookup = {k.strip().lower(): k for k in known if k}
+
+        def snap(name: str) -> str:
+            n = (name or "").strip()
+            low = n.lower()
+            if low in lookup:
+                return lookup[low]
+            # substring match either way, longest candidate wins so that
+            # "Ravi" prefers "Ravi Kumar Jadhav" over a shorter partial
+            best = ""
+            for k_low, k_orig in lookup.items():
+                if low and (low in k_low or k_low in low):
+                    if len(k_orig) > len(best):
+                        best = k_orig
+            return best or n
+
+        out: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
+        for r in relations:
+            src, tgt = snap(r.get("source", "")), snap(r.get("target", ""))
+            if not src or not tgt or src == tgt:
+                continue
+            key = (src.lower(), str(r.get("relation", "")).lower(), tgt.lower())
+            if key in seen:          # alignment can collapse variants into duplicates
+                continue
+            seen.add(key)
+            out.append({**r, "source": src, "target": tgt})
+        return out
 
     # ========================================================
     # PUBLIC: joint one-shot (preferred by pipeline)
@@ -477,6 +675,9 @@ class NLPExtractor:
                         rels = []
                 if not rels:
                     rels = self._cooccurrence_relations(text)
+            # Align endpoints onto the entities we actually kept, so relations
+            # reference real graph nodes rather than surface variants.
+            rels = self._align_to_known(rels, [e["text"] for e in ents])
             return ents, rels
 
         ents = self.extract_entities_with_spans(text)
@@ -859,6 +1060,10 @@ class NLPExtractor:
     def _deduplicate_entities(entities: list[dict]) -> list[dict]:
         if not entities:
             return []
+        # Both extraction paths (with_spans and entities_and_relations) funnel
+        # through here, so this is the one place person filtering is guaranteed
+        # to run regardless of which engine produced the entities.
+        entities = NLPExtractor._clean_person_entities(entities)
         entities.sort(
             key=lambda e: (
                 e["start"],
