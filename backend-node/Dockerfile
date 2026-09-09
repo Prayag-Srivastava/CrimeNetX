@@ -1,28 +1,34 @@
-# CrimeNetX — Node REST + WebSocket backend
+# ============================================================================
+# CrimeNetX — Node REST + WebSocket Backend (Development)
+# ============================================================================
 
 FROM node:20-alpine
 
-RUN apk update && apk add --no-cache openssl
+# Prisma requires OpenSSL
+RUN apk add --no-cache openssl
 
 WORKDIR /app
+
+# ----------------------------------------------------------------------------
+# Install dependencies
+# ----------------------------------------------------------------------------
 
 COPY package*.json ./
 
 RUN npm ci || npm install
 
+# ----------------------------------------------------------------------------
+# Prisma
+# ----------------------------------------------------------------------------
+
 COPY prisma ./prisma
 
-COPY tsconfig.json .
+RUN npx prisma generate
 
-COPY src ./src
-
-COPY data ./data
-
-RUN npx prisma generate && npm run build
+# ----------------------------------------------------------------------------
+# Development server
+# ----------------------------------------------------------------------------
 
 EXPOSE 5000
 
-# migrations run via docker-compose command
-# (prisma migrate deploy && npm run start)
-
-CMD ["npm", "run", "start"]
+CMD ["npm", "run", "dev"]

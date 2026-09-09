@@ -42,17 +42,15 @@ RUN pip install --upgrade pip setuptools wheel \
 RUN python -m spacy download en_core_web_sm
 
 # ── 4. IndicTrans2 (translation) ─────────────────────────────────────────────
-ARG HF_TOKEN=
-RUN python -c "\
+RUN --mount=type=secret,id=hf_token \
+    sh -c 'HF_TOKEN="$(cat /run/secrets/hf_token)" && \
+    python -c "\
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; \
-m='ai4bharat/indictrans2-indic-en-dist-200M'; \
-kw={'trust_remote_code': True}; \
-import os; \
-t=os.environ.get('HF_TOKEN') or '$HF_TOKEN'; \
-kw['token']=t if t else None; \
-AutoTokenizer.from_pretrained(m, **{k:v for k,v in kw.items() if v is not None}); \
-AutoModelForSeq2SeqLM.from_pretrained(m, **{k:v for k,v in kw.items() if v is not None}); \
-print('IndicTrans2 cached OK')"
+model=\"ai4bharat/indictrans2-indic-en-dist-200M\"; \
+token=\"${HF_TOKEN}\"; \
+AutoTokenizer.from_pretrained(model, token=token, trust_remote_code=True); \
+AutoModelForSeq2SeqLM.from_pretrained(model, token=token, trust_remote_code=True); \
+print(\"IndicTrans2 cached OK\")"'
 
 # ── 5. GLiNER-relex (PRIMARY: joint NER + relations) ─────────────────────────
 ARG GLINER_RELEX_MODEL=knowledgator/gliner-relex-large-v0.5
@@ -75,4 +73,4 @@ RUN mkdir -p data/raw_texts data/generated app/generated_dossiers
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

@@ -77,8 +77,6 @@ class Settings(BaseSettings):
     database_url: str = ""
 
     # Neo4j configuration.
-    # Neo4j is now the graph database/backend; these settings are retained
-    # here for the Neo4j service implementation.
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "crimenetx_neo4j_pass"
@@ -124,6 +122,17 @@ class Settings(BaseSettings):
             "punjabi": "pan",
             "urdu": "urd",
             "english": "eng",
+            "hi": "hin",
+            "mr": "mar",
+            "ta": "tam",
+            "te": "tel",
+            "bn": "ben",
+            "gu": "guj",
+            "kn": "kan",
+            "ml": "mal",
+            "pa": "pan",
+            "ur": "urd",
+            "en": "eng",
         }
     )
 
@@ -138,7 +147,7 @@ class Settings(BaseSettings):
 
     INDICTRANS_MODEL_NAME: str = (
         "ai4bharat/indictrans2-indic-en-dist-200M"
-        if INDICTRANS_MODEL_SIZE == "200M"
+        if os.getenv("INDICTRANS_MODEL_SIZE", "200M") == "200M"
         else "ai4bharat/indictrans2-indic-en-1B"
     )
 
@@ -151,9 +160,48 @@ class Settings(BaseSettings):
     TRANSLATION_BATCH_SIZE: int = 8
 
     # -----------------------------------------------------------------------
-    # Stage 3 — NER / spaCy
+    # Stage 3 — NER / Entity extraction
     # -----------------------------------------------------------------------
 
+    # Plain GLiNER fallback.
+    GLINER_MODEL: str = os.getenv(
+        "GLINER_MODEL",
+        "urchade/gliner_medium-v2.1",
+    )
+
+    GLINER_THRESHOLD: float = float(
+        os.getenv("GLINER_THRESHOLD", "0.4")
+    )
+
+    USE_GLINER: bool = os.getenv(
+        "USE_GLINER",
+        "true",
+    ).lower() in ("1", "true", "yes")
+
+    # Joint NER + Relationship Extraction — primary.
+    GLINER_RELEX_MODEL: str = os.getenv(
+        "GLINER_RELEX_MODEL",
+        "knowledgator/gliner-relex-large-v0.5",
+    )
+
+    USE_GLINER_RELEX: bool = os.getenv(
+        "USE_GLINER_RELEX",
+        "true",
+    ).lower() in ("1", "true", "yes")
+
+    RELEX_ENTITY_THRESHOLD: float = float(
+        os.getenv("RELEX_ENTITY_THRESHOLD", "0.4")
+    )
+
+    RELEX_ADJACENCY_THRESHOLD: float = float(
+        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.35")
+    )
+
+    RELEX_RELATION_THRESHOLD: float = float(
+        os.getenv("RELEX_RELATION_THRESHOLD", "0.75")
+    )
+
+    # spaCy last-resort fallback.
     SPACY_MODEL: str = os.getenv(
         "SPACY_MODEL",
         "en_core_web_sm",
@@ -167,8 +215,13 @@ class Settings(BaseSettings):
     SPLINK_REVIEW_THRESHOLD: float = 0.30
 
     # -----------------------------------------------------------------------
-    # Stage 5 — Relationship extraction
+    # Stage 5 — Relationship extraction fallback
     # -----------------------------------------------------------------------
+
+    GROQ_RELATION_FALLBACK: bool = os.getenv(
+        "GROQ_RELATION_FALLBACK",
+        "false",
+    ).lower() in ("1", "true", "yes")
 
     # -----------------------------------------------------------------------
     # Provenance / pipeline
@@ -181,11 +234,9 @@ class Settings(BaseSettings):
         )
     )
 
-    PIPELINE_VERSION: str = "v2.1-ocr-indictrans-splink"
-
-    # -----------------------------------------------------------------------
-    # Backwards-compatible module/service aliases
-    # -----------------------------------------------------------------------
+    PIPELINE_VERSION: str = (
+        "v2.2-ocr-indictrans-gliner-relex-splink"
+    )
 
     @property
     def pipeline_version(self) -> str:
@@ -222,8 +273,23 @@ TRANSLATION_BATCH_SIZE = settings.TRANSLATION_BATCH_SIZE
 
 SPACY_MODEL = settings.SPACY_MODEL
 
+# GLiNER
+GLINER_MODEL = settings.GLINER_MODEL
+GLINER_THRESHOLD = settings.GLINER_THRESHOLD
+USE_GLINER = settings.USE_GLINER
+
+# GLiNER-Relex
+GLINER_RELEX_MODEL = settings.GLINER_RELEX_MODEL
+USE_GLINER_RELEX = settings.USE_GLINER_RELEX
+RELEX_ENTITY_THRESHOLD = settings.RELEX_ENTITY_THRESHOLD
+RELEX_ADJACENCY_THRESHOLD = settings.RELEX_ADJACENCY_THRESHOLD
+RELEX_RELATION_THRESHOLD = settings.RELEX_RELATION_THRESHOLD
+
+# Splink
 SPLINK_MATCH_THRESHOLD = settings.SPLINK_MATCH_THRESHOLD
 SPLINK_REVIEW_THRESHOLD = settings.SPLINK_REVIEW_THRESHOLD
 
+# Groq
 GROQ_API_KEY = settings.GROQ_API_KEY or settings.groq_api_key
 GROQ_MODEL = settings.GROQ_MODEL or settings.groq_model
+GROQ_RELATION_FALLBACK = settings.GROQ_RELATION_FALLBACK

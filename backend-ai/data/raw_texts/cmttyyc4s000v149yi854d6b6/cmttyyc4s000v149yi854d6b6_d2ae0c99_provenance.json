@@ -1,0 +1,29 @@
+{
+  "document_id": "cmttyyc4s000v149yi854d6b6_d2ae0c99",
+  "case_id": "cmttyyc4s000v149yi854d6b6",
+  "original_filename": "tmptksnyu8b.pdf",
+  "original_file_hash": "2ac898896e553b22b8c806e4f90b356d07c8e98b8bb47db40fb534aaf352aca9",
+  "pipeline_version": "v2.2-ocr-indictrans-gliner-relex-splink",
+  "stages": {
+    "ocr": {
+      "raw_text_hash": "18f89478d23a2416ac28d07882205f7f0dcdabbd9cd7a4d71fcdb79d0b0b5c2b",
+      "language": "eng+hin",
+      "confidence": 89.26,
+      "raw_text_file": "data/raw_texts/cmttyyc4s000v149yi854d6b6/cmttyyc4s000v149yi854d6b6_d2ae0c99_raw.txt"
+    },
+    "translation": {
+      "translated_text_hash": "18f89478d23a2416ac28d07882205f7f0dcdabbd9cd7a4d71fcdb79d0b0b5c2b",
+      "source_language": "hi",
+      "model": "ai4bharat/indictrans2-indic-en-dist-200M",
+      "translated_text_file": "data/raw_texts/cmttyyc4s000v149yi854d6b6/cmttyyc4s000v149yi854d6b6_d2ae0c99_translated.txt"
+    }
+  },
+  "hash_chain": {
+    "step_1_original_file": "2ac898896e553b22b8c806e4f90b356d07c8e98b8bb47db40fb534aaf352aca9",
+    "step_2_ocr_text": "18f89478d23a2416ac28d07882205f7f0dcdabbd9cd7a4d71fcdb79d0b0b5c2b",
+    "step_3_translated_text": "18f89478d23a2416ac28d07882205f7f0dcdabbd9cd7a4d71fcdb79d0b0b5c2b"
+  },
+  "timestamps": {
+    "ingested_at": "2026-09-09T10:43:50.432927+00:00"
+  }
+}

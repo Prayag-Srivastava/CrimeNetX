@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.git
+.env
+chroma_data
+data/raw_texts
+data/generated
+app/generated_dossiers
+*.pdf
+test_*.py
