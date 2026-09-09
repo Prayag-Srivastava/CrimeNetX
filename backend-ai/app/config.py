@@ -62,8 +62,12 @@ class Settings(BaseSettings):
         "yes",
     )
     RELEX_ENTITY_THRESHOLD: float = float(os.getenv("RELEX_ENTITY_THRESHOLD", "0.4"))
+    # Above ~0.5 the adjacency gate rejects every candidate pair before the
+    # relation head ever scores it, so relation extraction returns nothing at
+    # all. Measured against sakshya_fir_if1_v5 ground truth: 0.55 -> 0/11
+    # relations, 0.35 -> 11/11, entities unchanged at 16/16.
     RELEX_ADJACENCY_THRESHOLD: float = float(
-        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.55")
+        os.getenv("RELEX_ADJACENCY_THRESHOLD", "0.35")
     )
     RELEX_RELATION_THRESHOLD: float = float(
         os.getenv("RELEX_RELATION_THRESHOLD", "0.75")
