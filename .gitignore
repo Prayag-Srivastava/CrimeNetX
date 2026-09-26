@@ -35,6 +35,7 @@ Thumbs.db
 
 # --- Generated mock artifacts ---
 backend-ai/data/generated/
+backend-ai/data/raw_texts/
 
 # --- ChromaDB persistence ---
 chroma_data/

@@ -504,7 +504,11 @@ export async function importNlpResults(req: Request, res: Response, next: NextFu
           };
 
           for (const gNode of graph.nodes ?? []) {
-            const nonCriminal = isNonCriminalNode(gNode.entity_type, gNode.label, gNode.role);
+            const nonCriminal = isNonCriminalNode(
+  (gNode as any).entity_type,
+  gNode.label,
+  gNode.role
+);
             await prisma.networkNode.updateMany({
               where: {
                 caseId,

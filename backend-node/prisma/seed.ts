@@ -125,11 +125,27 @@ async function main() {
   // --- Users -----------------------------------------------------------------
   const users: Record<string, string> = {};
   for (const u of USERS) {
-    const existing = await prisma.user.findUnique({ where: { email: u.email } });
-    if (existing) {
-      users[u.role] = existing.id;
-      continue;
-    }
+    const existing = await prisma.user.findUnique({
+  where: { email: u.email },
+});
+
+if (existing) {
+  const passwordHash = await bcrypt.hash(PASSWORD, 12);
+
+  const updated = await prisma.user.update({
+    where: { id: existing.id },
+    data: {
+      passwordHash,
+      name: u.name,
+      role: u.role,
+      department: u.department,
+      badgeNumber: u.badgeNumber,
+    },
+  });
+
+  users[u.role] = updated.id;
+  continue;
+}
     const created = await prisma.user.create({
       data: { ...u, passwordHash: await bcrypt.hash(PASSWORD, 12) },
     });

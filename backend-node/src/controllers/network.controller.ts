@@ -345,7 +345,12 @@ export async function getNetwork(req: Request, res: Response, next: NextFunction
         } else if (rel === "co_location") {
           elab = `🕵️ TACTICAL GEOGRAPHIC SURVEILLANCE REPORT\n───────────────────────────────────────────────\n📌 RELATIONSHIP NATURE: Spatial Co-presence at Incident Site\n\n📖 EVIDENCE & CASE STORYLINE BREAKDOWN:\n   1. Physical Co-location:\n      Cell tower dump footprints and surveillance logs confirm physical co-presence at primary meeting hideout or crime scene.\n\n🛡️ ACTIONABLE POLICE RECOMMENDATIONS:\n   ✓ Review local CCTV footage and cross-examine field surveillance logs.`;
         } else {
-          elab = `🕵️ TACTICAL CASE BACKGROUND REPORT\n───────────────────────────────────────────────\n📌 RELATIONSHIP NATURE: Direct Syndicate Criminal Association\n\n📖 EVIDENCE & CASE STORYLINE BREAKDOWN:\n   1. Criminal Chargesheet Alignment:\n      Extracted from official FIR chargesheets and witness statements identifying entities as active co-conspirators.\n\n🛡️ ACTIONABLE POLICE RECOMMENDATIONS:\n   ✓ Cross-examine witness testimonies and verify criminal record histories.`;
+          elab = `🕵️ TACTICAL CASE BACKGROUND REPORT
+...
+          ✓ Cross-examine witness testimonies and verify criminal record histories.`;
+        }
+      }  // <-- ADD THIS ONE
+
       const sNode = nodes.find((n) => n.id === e.sourceId);
       const tNode = nodes.find((n) => n.id === e.targetId);
       const isSrcSuspect = /billa|ranga|kuljeet|jasbir/i.test(sNode?.label || "");
@@ -364,7 +369,7 @@ export async function getNetwork(req: Request, res: Response, next: NextFunction
     });
 
     const sanitizedNodes = nodes.map((n) => {
-      const nonCriminal = isNonCriminalNode(n.type || (n as any).entityType, n.label, n.personRole);
+      const nonCriminal = isNonCriminalNode(n.entityType, n.label, n.personRole);
       const isCore = /billa|ranga|kuljeet|jasbir/i.test(n.label);
       let finalLabel = n.label;
       if (/kuljeet/i.test(n.label) && !n.label.includes("@") && !n.label.toLowerCase().includes("ranga")) {
@@ -655,7 +660,7 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
       const isCore = /billa|ranga|kuljeet|jasbir/i.test(n.label);
       const isVic = !isCore && Boolean(n.is_victim || n.label.toLowerCase().includes("victim"));
       const isWit = !isCore && Boolean(n.is_witness || n.label.toLowerCase().includes("witness"));
-      const isPol = !isCore && Boolean(n.is_police || isPoliceOfficerName(n.label));
+      const isPol = !isCore && Boolean(isPoliceOfficerName(n.label));
 
       const nonCriminal = isNonCriminalNode(etype, n.label, isVic ? "VICTIM" : (isWit ? "WITNESS" : (isPol ? "POLICE" : null)));
       const finalKingpinScore = nonCriminal ? 0 : isCore ? Math.max(n.kingpin_score, 75) : n.kingpin_score;
@@ -678,7 +683,7 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
           label: finalLabel,
           kingpinScore: finalKingpinScore,
           role: finalRole,
-          personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : (isPol ? "POLICE" : "ACCUSED")),
+          personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : "ACCUSED"),
           centrality: n.centrality,
         },
         update: {
@@ -687,7 +692,7 @@ export async function rebuildNetwork(req: Request, res: Response, next: NextFunc
           label: finalLabel,
           kingpinScore: finalKingpinScore,
           role: finalRole,
-          personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : (isPol ? "POLICE" : "ACCUSED")),
+          personRole: isVic ? "VICTIM" : (isWit ? "WITNESS" : "ACCUSED"),
           centrality: n.centrality,
         },
       });
